@@ -1,0 +1,775 @@
+/* TMDB Library Styles */
+.tmdb-library {
+  padding: 1.5rem;
+  background: #0a0a0f;
+  min-height: 100vh;
+  color: #fff;
+}
+
+/* Header */
+.tmdb-library__header {
+  max-width: 1400px;
+  margin: 0 auto 2rem;
+}
+
+.tmdb-library__title {
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 0.5rem;
+  line-height: 1.2;
+}
+
+.tmdb-library__subtitle {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.6;
+  max-width: 600px;
+}
+
+.tmdb-library__heading {
+  margin-bottom: 1.5rem;
+}
+
+/* Search — hidden */
+.tmdb-library__search {
+  display: none;
+}
+
+.tmdb-library__search-icon {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.tmdb-library__search-input {
+  width: 100%;
+  padding: 1rem 3rem 1rem 3rem;
+  border: none;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+}
+
+.tmdb-library__search-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.tmdb-library__search-input:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.4);
+}
+
+.tmdb-library__search-clear {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+}
+
+.tmdb-library__search-clear:hover {
+  color: #fff;
+}
+
+/* Categories */
+.tmdb-library__categories {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.tmdb-library__category-btn {
+  padding: 0.6rem 1.2rem;
+  border: none;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tmdb-library__category-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.tmdb-library__category-btn.active {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+}
+
+/* Genres */
+.tmdb-library__genres {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tmdb-library__genre-btn {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tmdb-library__genre-btn:hover {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.tmdb-library__genre-btn.active {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #fff;
+}
+
+/* Loading */
+.tmdb-library__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.tmdb-library__spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #f59e0b;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.tmdb-library__loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+/* Empty state */
+.tmdb-library__empty {
+  text-align: center;
+  padding: 4rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.tmdb-library__empty p:first-child {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Grid */
+.tmdb-library__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1.5rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Movie Card */
+.tmdb-movie-card {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.tmdb-movie-card:hover {
+  box-shadow: 0 0 25px rgba(245, 158, 11, 0.15), 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.tmdb-movie-card__poster {
+  position: relative;
+  aspect-ratio: 2/3;
+  overflow: hidden;
+}
+
+.tmdb-movie-card__poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+
+.tmdb-movie-card:hover .tmdb-movie-card__poster img {
+  transform: scale(1.05);
+}
+
+.tmdb-movie-card__overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.tmdb-movie-card:hover .tmdb-movie-card__overlay {
+  opacity: 1;
+}
+
+.tmdb-movie-card__play-btn {
+  width: 60px;
+  height: 60px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transform: scale(0.8);
+  transition: transform 0.3s ease;
+}
+
+.tmdb-movie-card:hover .tmdb-movie-card__play-btn {
+  transform: scale(1);
+}
+
+.tmdb-movie-card__play-btn svg {
+  width: 28px;
+  height: 28px;
+  margin-left: 4px;
+}
+
+.tmdb-movie-card__rating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  padding: 0.3rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.tmdb-movie-card__info {
+  padding: 0.8rem;
+}
+
+.tmdb-movie-card__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tmdb-movie-card__meta {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.tmdb-movie-card__meta span:first-child {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Favorite button on card */
+.tmdb-movie-card__fav-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  opacity: 0;
+  transform: scale(0.8);
+  z-index: 5;
+  padding: 0;
+}
+
+.tmdb-movie-card__fav-btn svg {
+  transition: fill 0.4s ease, stroke 0.4s ease, transform 0.3s ease;
+}
+
+.tmdb-movie-card:hover .tmdb-movie-card__fav-btn,
+.tmdb-movie-card__fav-btn--active {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.tmdb-movie-card__fav-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+  transform: scale(1.15);
+}
+
+.tmdb-movie-card__fav-btn--active {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.tmdb-movie-card__fav-btn--animating svg {
+  animation: heartPop 0.45s ease;
+}
+
+.tmdb-movie-card__fav-btn--active:hover {
+  transform: scale(1.15);
+}
+
+@keyframes heartPop {
+  0% { transform: scale(1); }
+  25% { transform: scale(1.3); }
+  50% { transform: scale(0.9); }
+  75% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+/* Pagination */
+.tmdb-library__pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 2rem;
+  padding: 1rem;
+}
+
+.tmdb-library__page-btn {
+  padding: 0.7rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tmdb-library__page-btn:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.3);
+  cursor: not-allowed;
+}
+
+.tmdb-library__page-btn:not(:disabled):hover {
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
+}
+
+.tmdb-library__page-info {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Modal */
+.tmdb-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  padding: 1rem;
+  animation: modalOverlayIn 0.35s ease;
+}
+
+@keyframes modalOverlayIn {
+  from { opacity: 0; backdrop-filter: blur(0px); }
+  to { opacity: 1; backdrop-filter: blur(8px); }
+}
+
+.tmdb-modal__content {
+  background: #121218;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  max-width: 700px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+  animation: modalContentIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalContentIn {
+  from { transform: translateY(40px) scale(0.95); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.tmdb-modal__close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.tmdb-modal__close:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+.tmdb-modal__movie {
+  display: flex;
+  gap: 1.5rem;
+  padding: 1.5rem;
+}
+
+.tmdb-modal__poster {
+  width: 200px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+.tmdb-modal__details {
+  flex: 1;
+  min-width: 0;
+}
+
+.tmdb-modal__title {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+  padding-right: 2rem;
+}
+
+.tmdb-modal__tagline {
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 0.75rem;
+}
+
+.tmdb-modal__meta {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.tmdb-modal__genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tmdb-modal__genre {
+  padding: 0.3rem 0.8rem;
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: 12px;
+  font-size: 0.8rem;
+  color: #f59e0b;
+}
+
+.tmdb-modal__overview {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.8);
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* URL Section */
+.tmdb-modal__url-section {
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tmdb-modal__url-section h3 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.tmdb-modal__url-hint {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 1rem;
+}
+
+.tmdb-modal__url-input {
+  width: 100%;
+  padding: 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  transition: all 0.2s ease;
+}
+
+.tmdb-modal__url-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.tmdb-modal__url-input:focus {
+  outline: none;
+  border-color: #f59e0b;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tmdb-modal__actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+}
+
+.tmdb-modal__cancel-btn,
+.tmdb-modal__confirm-btn {
+  padding: 0.8rem 1.5rem;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tmdb-modal__cancel-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.tmdb-modal__cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.tmdb-modal__confirm-btn {
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+}
+
+.tmdb-modal__confirm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tmdb-modal__confirm-btn:not(:disabled):hover {
+  box-shadow: 0 0 25px rgba(245, 158, 11, 0.4);
+}
+
+/* Source Tabs */
+.tmdb-modal__source-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tmdb-modal__source-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tmdb-modal__source-tab:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.tmdb-modal__source-tab.active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fff;
+}
+
+.tmdb-modal__source-icon {
+  font-size: 1.2rem;
+}
+
+/* Auto section */
+.tmdb-modal__auto-section {
+  margin-bottom: 1rem;
+}
+
+.tmdb-modal__auto-info {
+  color: #4ade80;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: rgba(74, 222, 128, 0.1);
+  border-radius: 8px;
+}
+
+.tmdb-modal__auto-warning {
+  color: #fbbf24;
+  font-size: 0.9rem;
+  padding: 0.75rem;
+  background: rgba(251, 191, 36, 0.1);
+  border-radius: 8px;
+}
+
+/* Balancer grid */
+.tmdb-modal__balancer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.tmdb-modal__balancer-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.75rem;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tmdb-modal__balancer-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tmdb-modal__balancer-btn.active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.tmdb-modal__balancer-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.tmdb-modal__balancer-desc {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 2px;
+}
+
+/* Manual section */
+.tmdb-modal__manual-section {
+  margin-bottom: 1rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .tmdb-library__grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 1rem;
+  }
+
+  .tmdb-modal__movie {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .tmdb-modal__poster {
+    width: 150px;
+  }
+
+  .tmdb-modal__meta {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .tmdb-modal__genres {
+    justify-content: center;
+  }
+
+  .tmdb-modal__source-tabs {
+    flex-direction: column;
+  }
+
+  .tmdb-modal__balancer-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .tmdb-library {
+    padding: 1rem;
+  }
+
+  .tmdb-library__title {
+    font-size: 1.5rem;
+  }
+
+  .tmdb-library__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .tmdb-movie-card__play-btn {
+    width: 48px;
+    height: 48px;
+  }
+
+  .tmdb-library__pagination {
+    flex-direction: column;
+    gap: 1rem;
+  }
+}

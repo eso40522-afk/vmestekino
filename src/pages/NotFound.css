@@ -1,0 +1,201 @@
+.notFound {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(245, 158, 11, 0.14), transparent 30%),
+    radial-gradient(circle at 80% 20%, rgba(239, 68, 68, 0.14), transparent 24%),
+    linear-gradient(180deg, #09090f 0%, #11111a 100%);
+}
+
+.notFound__ambient {
+  position: absolute;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  filter: blur(22px);
+  opacity: 0.9;
+  animation: notFoundFloat 10s ease-in-out infinite;
+}
+
+.notFound__ambient--left {
+  left: -120px;
+  bottom: -140px;
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.2) 0%, rgba(245, 158, 11, 0) 68%);
+}
+
+.notFound__ambient--right {
+  right: -140px;
+  top: -120px;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.18) 0%, rgba(239, 68, 68, 0) 70%);
+  animation-delay: -4s;
+}
+
+.notFound__card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 680px);
+  padding: 40px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(19, 19, 28, 0.92) 0%, rgba(13, 13, 20, 0.88) 100%);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  text-align: center;
+  animation: notFoundCardIn 0.55s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.notFound__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 88px;
+  height: 36px;
+  margin-bottom: 16px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  color: #f7b44c;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+.notFound__eyebrow {
+  margin: 0 0 12px;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.notFound__title {
+  margin: 0;
+  font-size: clamp(34px, 6vw, 58px);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  color: #fff;
+}
+
+.notFound__text {
+  max-width: 520px;
+  margin: 20px auto 0;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.notFound__path {
+  margin: 28px auto 0;
+  padding: 16px 18px;
+  max-width: 520px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.notFound__pathLabel {
+  display: block;
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.notFound__pathValue {
+  color: #fff3d6;
+  font-size: 15px;
+  word-break: break-word;
+  font-family: 'Consolas', 'SFMono-Regular', monospace;
+}
+
+.notFound__actions {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 30px;
+  flex-wrap: wrap;
+}
+
+.notFound__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+  padding: 14px 24px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.notFound__action:hover {
+  transform: translateY(-2px);
+}
+
+.notFound__action--primary {
+  background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+  color: #fff;
+  box-shadow: 0 18px 36px rgba(245, 158, 11, 0.18);
+}
+
+.notFound__action--ghost {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+@keyframes notFoundCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes notFoundFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -20px, 0) scale(1.04);
+  }
+}
+
+@media (max-width: 768px) {
+  .notFound {
+    padding: 20px;
+  }
+
+  .notFound__card {
+    padding: 28px 22px;
+    border-radius: 24px;
+  }
+
+  .notFound__text {
+    font-size: 15px;
+  }
+
+  .notFound__actions {
+    flex-direction: column;
+  }
+
+  .notFound__action {
+    width: 100%;
+  }
+}

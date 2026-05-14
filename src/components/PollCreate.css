@@ -1,0 +1,312 @@
+/* ===== Poll Create - yellow-orange theme ===== */
+
+.pollCreate {
+  width: 100%;
+  max-width: 100%;
+  background: #0a0a0f;
+  border: none;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 460px;
+  transform-origin: bottom center;
+}
+
+/* Wrapper animations */
+.pollCreate__wrapper {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  z-index: 200;
+}
+
+.pollCreate__wrapper .pollCreate {
+  animation: pollSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.pollCreate__wrapper--exit .pollCreate {
+  animation: pollSlideDown 0.25s cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
+}
+
+@keyframes pollSlideDown {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+}
+
+/* Entry animation */
+.pollCreate--enter {
+  animation: pollSlideUp 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pollSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ===== Header ===== */
+.pollCreate__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(245, 158, 11, 0.03);
+}
+
+.pollCreate__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fbbf24;
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+
+.pollCreate__closeBtn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pollCreate__closeBtn:hover {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+/* ===== Body ===== */
+.pollCreate__body {
+  padding: 14px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.pollCreate__body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.pollCreate__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pollCreate__body::-webkit-scrollbar-thumb {
+  background: rgba(245, 158, 11, 0.2);
+  border-radius: 4px;
+}
+
+/* ===== Field ===== */
+.pollCreate__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: pollFieldAppear 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pollFieldAppear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pollCreate__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #f59e0b;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.pollCreate__input {
+  padding: 11px 14px;
+  background: rgba(245, 158, 11, 0.05);
+  border: 1px solid rgba(245, 158, 11, 0.15);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.pollCreate__input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.pollCreate__input:focus {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.08);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.1);
+}
+
+.pollCreate__counter {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.25);
+  text-align: right;
+}
+
+/* ===== Option Rows ===== */
+.pollCreate__optionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(245, 158, 11, 0.05);
+  border: 1px solid rgba(245, 158, 11, 0.12);
+  border-radius: 8px;
+  padding: 4px 8px 4px 12px;
+  transition: all 0.2s;
+  animation: pollOptionSlide 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pollOptionSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.pollCreate__optionRow:focus-within {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.pollCreate__optionEmoji {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.pollCreate__optionInput {
+  flex: 1;
+  padding: 10px 8px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+}
+
+.pollCreate__optionInput::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.pollCreate__optionRemove {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pollCreate__optionRemove:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* ===== Add Option Button ===== */
+.pollCreate__addOption {
+  padding: 10px;
+  background: transparent;
+  border: 1px dashed rgba(245, 158, 11, 0.2);
+  border-radius: 8px;
+  color: rgba(245, 158, 11, 0.6);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pollCreate__addOption:hover {
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.05);
+}
+
+/* ===== Multi-Select Checkbox ===== */
+.pollCreate__multiSelect {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.pollCreate__multiSelect:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.pollCreate__multiSelect input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #f59e0b;
+  cursor: pointer;
+}
+
+/* ===== Submit Button ===== */
+.pollCreate__submit {
+  padding: 11px 22px;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  border: none;
+  border-radius: 8px;
+  color: #000;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  align-self: flex-end;
+  letter-spacing: 0.3px;
+}
+
+.pollCreate__submit:hover {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  box-shadow: 0 4px 16px rgba(245, 158, 11, 0.3);
+  transform: translateY(-1px);
+}
+
+.pollCreate__submit:active {
+  transform: translateY(0);
+}
+
+.pollCreate__submit:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}

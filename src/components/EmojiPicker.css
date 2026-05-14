@@ -1,0 +1,117 @@
+.emojiPicker {
+  width: 320px;
+  background: #1a1a24;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+/* Wrapper animations */
+.emojiPicker__wrapper {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 200;
+  margin-bottom: 8px;
+}
+
+.emojiPicker__wrapper--enter .emojiPicker {
+  animation: emojiPickerIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.emojiPicker__wrapper--exit .emojiPicker {
+  animation: emojiPickerOut 0.25s cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
+}
+
+@keyframes emojiPickerIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes emojiPickerOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+
+.emojiPicker__header {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.emojiPicker__categoryBtn {
+  flex: 1;
+  padding: 8px 4px;
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+  opacity: 0.5;
+}
+
+.emojiPicker__categoryBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 0.8;
+}
+
+.emojiPicker__categoryBtn--active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.emojiPicker__grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.emojiPicker__grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.emojiPicker__grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.emojiPicker__grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.emojiPicker__emoji {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.emojiPicker__emoji:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.15);
+}
