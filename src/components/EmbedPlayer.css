@@ -383,7 +383,6 @@
 .embed-player__error-btn--alt:hover {
   background: rgba(255, 255, 255, 0.15);
   box-shadow: none;
-  transform: translateY(-2px);
 }
 
 /* Info bar */
@@ -576,7 +575,6 @@
 .embed-player__timeout-balancer-btn:hover {
   background: rgba(245, 158, 11, 0.15);
   border-color: rgba(245, 158, 11, 0.3);
-  transform: translateY(-1px);
 }
 
 .embed-player__timeout-balancer-name {

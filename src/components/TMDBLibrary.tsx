@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   type TMDBMovie,
   type TMDBMovieDetails,
@@ -7,7 +7,8 @@ import {
   getNowPlayingMovies,
   getUpcomingMovies,
   searchMovies,
-  getMoviesByGenre,
+  discoverMovies,
+  getMovieDetails,
   getPosterUrl,
   getGenreName,
   formatReleaseDate,
@@ -24,6 +25,14 @@ export interface SelectedMovieData extends TMDBMovieDetails {
   kinopoiskId?: string | null
   imdbId?: string | null
   useEmbed?: boolean
+  sourceType?: 'html5' | 'youtube' | 'embed' | 'rutube' | 'vkvideo'
+}
+
+interface MovieOpenInfo {
+  id: number
+  title?: string | null
+  originalTitle?: string | null
+  year?: string | number | null
 }
 
 interface TMDBLibraryProps {
@@ -31,10 +40,25 @@ interface TMDBLibraryProps {
   showFavorites?: boolean
   initialMovieId?: number | null
   onClearInitialMovie?: () => void
+  /** Called when a movie page is opened — parent updates the URL slug. */
+  onMovieOpen?: (movie: MovieOpenInfo) => void
+  /** Called when the movie page is closed — parent navigates back to the list. */
+  onMovieClose?: () => void
   onCreateRoom?: (isPrivate: boolean) => void
 }
 
-type CategoryType = 'popular' | 'top_rated' | 'now_playing' | 'upcoming' | 'favorites'
+type CategoryType = 'popular' | 'top_rated' | 'now_playing' | 'upcoming' | 'favorites' | 'catalog'
+
+const MAX_GENRES = 2
+
+interface CatalogSource {
+  tmdbId: string
+  imdbId?: string | null
+  sourceType: string
+  title?: string | null
+  posterPath?: string | null
+  updatedAt?: string | null
+}
 
 interface FavoriteMovie {
   movieId: string
@@ -58,13 +82,19 @@ function resolveFavoritePosterUrl(posterPath: string): string {
   return getPosterUrl(posterPath, 'w500')
 }
 
-export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onClearInitialMovie, onCreateRoom }: TMDBLibraryProps) {
+export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onClearInitialMovie, onMovieOpen, onMovieClose, onCreateRoom }: TMDBLibraryProps) {
   const { token } = useAuth()
+  const YEAR_MIN = 1950
+  const YEAR_MAX = new Date().getFullYear()
   const [movies, setMovies] = useState<TMDBMovie[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>('popular')
-  const [selectedGenre, setSelectedGenre] = useState<number | null>(null)
+  const [selectedGenres, setSelectedGenres] = useState<number[]>([])
+  const [yearFrom, setYearFrom] = useState<number>(YEAR_MIN)
+  const [yearTo, setYearTo] = useState<number>(YEAR_MAX)
+  const [yearFromInput, setYearFromInput] = useState<string>(String(YEAR_MIN))
+  const [yearToInput, setYearToInput] = useState<string>(String(YEAR_MAX))
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [moviePageId, setMoviePageId] = useState<number | null>(null)
@@ -73,12 +103,15 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
   const [loadingFavorites, setLoadingFavorites] = useState(false)
   const [animatingFavId, setAnimatingFavId] = useState<string | null>(null)
 
-  // Auto-open movie page from URL param
+  // Каталог фильмов, для которых админ привязал источник (RuTube, embed, html5 и т. п.).
+  const [catalogMovies, setCatalogMovies] = useState<TMDBMovie[]>([])
+  const [catalogSourceTypes, setCatalogSourceTypes] = useState<Map<number, string>>(new Map())
+  const [loadingCatalog, setLoadingCatalog] = useState(false)
+
+  // Sync movie page state with URL-driven initialMovieId (slug source of truth).
   useEffect(() => {
-    if (initialMovieId && moviePageId === null) {
-      setMoviePageId(initialMovieId)
-      onClearInitialMovie?.()
-    }
+    setMoviePageId(initialMovieId ?? null)
+    if (initialMovieId) onClearInitialMovie?.()
   }, [initialMovieId])
 
   // Sync showFavorites prop with selectedCategory
@@ -162,63 +195,214 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
 
   // Загрузка фильмов
   const ITEMS_PER_PAGE = 24
-  const TMDB_PER_PAGE = 20
+
+  // Каталог: грузим один раз и кэшируем (для фильтра «Доступно онлайн»).
+  const loadCatalog = useCallback(async () => {
+    setLoadingCatalog(true)
+    try {
+      const res = await fetch(`${API_URL}/video-sources/catalog`)
+      if (!res.ok) throw new Error('catalog request failed')
+      const data = await res.json() as { sources?: CatalogSource[] }
+      const sources = (data.sources || []).filter(src => Number.isFinite(Number(src.tmdbId)))
+
+      // Маппинг tmdbId -> sourceType для отображения плашки источника на карточке.
+      const typesMap = new Map<number, string>()
+      sources.forEach(src => {
+        typesMap.set(Number(src.tmdbId), String(src.sourceType || '').toLowerCase())
+      })
+      setCatalogSourceTypes(typesMap)
+
+      // Заглушки сразу, чтобы пользователь видел список — детали догрузим параллельно.
+      const placeholderMovies: TMDBMovie[] = sources.map(src => ({
+        id: Number(src.tmdbId),
+        title: src.title || 'Без названия',
+        original_title: src.title || '',
+        overview: '',
+        poster_path: src.posterPath || null,
+        backdrop_path: null,
+        release_date: '',
+        vote_average: 0,
+        vote_count: 0,
+        genre_ids: [],
+        popularity: 0,
+        adult: false
+      }))
+      setCatalogMovies(placeholderMovies)
+
+      // Догружаем детали TMDB (постер/год/жанры/рейтинг) с защитой от ошибок.
+      const detailResults = await Promise.allSettled(
+        placeholderMovies.map(movie => getMovieDetails(movie.id))
+      )
+      const enriched: TMDBMovie[] = placeholderMovies.map((movie, idx) => {
+        const result = detailResults[idx]
+        if (result.status !== 'fulfilled') return movie
+        const details = result.value
+        return {
+          ...movie,
+          title: details.title || movie.title,
+          original_title: details.original_title || movie.original_title,
+          overview: details.overview || '',
+          poster_path: details.poster_path || movie.poster_path,
+          backdrop_path: details.backdrop_path || null,
+          release_date: details.release_date || '',
+          vote_average: details.vote_average || 0,
+          vote_count: details.vote_count || 0,
+          genre_ids: Array.isArray(details.genres) ? details.genres.map(g => g.id) : []
+        }
+      })
+      setCatalogMovies(enriched)
+    } catch (error) {
+      console.error('Ошибка загрузки каталога:', error)
+      setCatalogMovies([])
+    } finally {
+      setLoadingCatalog(false)
+    }
+  }, [])
 
   const fetchTmdbPage = useCallback(async (tmdbPage: number) => {
+    const yearActive = yearFrom > YEAR_MIN || yearTo < YEAR_MAX
+    let response
     if (searchQuery.trim()) {
-      return searchMovies(searchQuery, tmdbPage)
-    } else if (selectedGenre) {
-      return getMoviesByGenre(selectedGenre, tmdbPage, selectedCategory === 'favorites' ? 'popular' : selectedCategory)
+      response = await searchMovies(searchQuery, tmdbPage)
+    } else if (selectedGenres.length > 0 || yearActive) {
+      response = await discoverMovies({
+        genreIds: selectedGenres,
+        page: tmdbPage,
+        category: (selectedCategory === 'favorites' || selectedCategory === 'catalog') ? 'popular' : selectedCategory,
+        yearFrom: yearActive ? yearFrom : null,
+        yearTo: yearActive ? yearTo : null
+      })
     } else {
       switch (selectedCategory) {
         case 'top_rated':
-          return getTopRatedMovies(tmdbPage)
+          response = await getTopRatedMovies(tmdbPage)
+          break
         case 'now_playing':
-          return getNowPlayingMovies(tmdbPage)
+          response = await getNowPlayingMovies(tmdbPage)
+          break
         case 'upcoming':
-          return getUpcomingMovies(tmdbPage)
+          response = await getUpcomingMovies(tmdbPage)
+          break
         default:
-          return getPopularMovies(tmdbPage)
+          response = await getPopularMovies(tmdbPage)
       }
     }
-  }, [searchQuery, selectedGenre, selectedCategory])
+
+    // Дополнительная клиентская фильтрация по году, чтобы отображаемый
+    // release_date (региональный) совпадал с выбранным диапазоном.
+    // TMDB фильтрует по primary_release_date (глобальный), который может
+    // отличаться от regional release_date, который показывается в карточке.
+    if (yearActive) {
+      const filtered = (response.results || []).filter(movie => {
+        if (!movie.release_date) return false
+        const year = parseInt(movie.release_date.slice(0, 4), 10)
+        if (!Number.isFinite(year)) return false
+        return year >= yearFrom && year <= yearTo
+      })
+      return { ...response, results: filtered }
+    }
+
+    return response
+  }, [searchQuery, selectedGenres, selectedCategory, yearFrom, yearTo, YEAR_MIN, YEAR_MAX])
+
+  // Кэш накопленных страниц TMDB по ключу (категория|жанр|поиск).
+  // Это даёт нам стабильную пагинацию по 24, без дубликатов и без «дыр» из-за фильтрации.
+  type CacheEntry = {
+    items: TMDBMovie[]
+    seenIds: Set<number>
+    nextTmdbPage: number
+    totalTmdbPages: number
+    exhausted: boolean
+  }
+  const cacheRef = useRef<Map<string, CacheEntry>>(new Map())
+  const cacheKey = `${selectedCategory}|${selectedGenres.join(',')}|${searchQuery.trim().toLowerCase()}|${yearFrom}-${yearTo}`
+
+  // Сбрасываем кэш при изменении категории/жанров/года/поиска, чтобы не показывать
+  // устаревшие данные и не накапливать пустые ответы при race-условиях StrictMode.
+  useEffect(() => {
+    cacheRef.current = new Map()
+  }, [selectedCategory, selectedGenres, yearFrom, yearTo, searchQuery])
+
+  const ensureItems = useCallback(async (key: string, neededCount: number): Promise<CacheEntry> => {
+    let entry = cacheRef.current.get(key)
+    if (!entry) {
+      entry = { items: [], seenIds: new Set(), nextTmdbPage: 1, totalTmdbPages: 1, exhausted: false }
+      cacheRef.current.set(key, entry)
+    }
+    // TMDB ограничивает выдачу 500 страницами.
+    const MAX_TMDB_PAGES = 500
+    // Защитный потолок на число подзапросов за один вызов, чтобы не подвиснуть.
+    let safety = 30
+    while (entry.items.length < neededCount && !entry.exhausted && safety-- > 0) {
+      const pageToFetch = entry.nextTmdbPage
+      let response
+      try {
+        response = await fetchTmdbPage(pageToFetch)
+      } catch {
+        entry.exhausted = true
+        break
+      }
+      entry.totalTmdbPages = Math.min(response.total_pages ?? 1, MAX_TMDB_PAGES)
+      for (const movie of response.results || []) {
+        if (!entry.seenIds.has(movie.id)) {
+          entry.seenIds.add(movie.id)
+          entry.items.push(movie)
+        }
+      }
+      entry.nextTmdbPage = pageToFetch + 1
+      if (entry.nextTmdbPage > entry.totalTmdbPages) {
+        entry.exhausted = true
+      }
+    }
+    return entry
+  }, [fetchTmdbPage])
 
   const loadMovies = useCallback(async () => {
     if (selectedCategory === 'favorites') {
       loadFavorites()
       return
     }
+    if (selectedCategory === 'catalog') {
+      // Catalog уже загружен отдельным эффектом — здесь только сбрасываем индикатор загрузки.
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
+      const needed = page * ITEMS_PER_PAGE
+      const entry = await ensureItems(cacheKey, needed)
       const startIndex = (page - 1) * ITEMS_PER_PAGE
-      const endIndex = startIndex + ITEMS_PER_PAGE
-
-      const firstTmdbPage = Math.floor(startIndex / TMDB_PER_PAGE) + 1
-      const lastTmdbPage = Math.floor((endIndex - 1) / TMDB_PER_PAGE) + 1
-
-      const pages = []
-      for (let p = firstTmdbPage; p <= lastTmdbPage; p++) {
-        pages.push(fetchTmdbPage(p))
-      }
-      const responses = await Promise.all(pages)
-
-      const allMovies = responses.flatMap(r => r.results)
-      const offsetInAll = startIndex - (firstTmdbPage - 1) * TMDB_PER_PAGE
-      const sliced = allMovies.slice(offsetInAll, offsetInAll + ITEMS_PER_PAGE)
-
+      const sliced = entry.items.slice(startIndex, startIndex + ITEMS_PER_PAGE)
       setMovies(sliced)
-      const totalItems = responses[0].total_pages * TMDB_PER_PAGE
-      setTotalPages(Math.min(Math.floor(totalItems / ITEMS_PER_PAGE), 500))
+
+      // Оценка общего числа страниц.
+      // Пока не исчерпали TMDB: экстраполируем по доле прошедших фильтр.
+      if (entry.exhausted) {
+        setTotalPages(Math.max(1, Math.ceil(entry.items.length / ITEMS_PER_PAGE)))
+      } else {
+        const fetchedTmdbPages = entry.nextTmdbPage - 1
+        const passRate = fetchedTmdbPages > 0 ? entry.items.length / fetchedTmdbPages : 0
+        const estimatedItems = Math.round(passRate * entry.totalTmdbPages)
+        const estimatedPages = Math.max(page + 1, Math.ceil(estimatedItems / ITEMS_PER_PAGE))
+        setTotalPages(Math.min(estimatedPages, 500))
+      }
     } catch (error) {
       console.error('Ошибка загрузки фильмов:', error)
     } finally {
       setLoading(false)
     }
-  }, [fetchTmdbPage, page, loadFavorites, selectedCategory])
+  }, [cacheKey, ensureItems, page, loadFavorites, selectedCategory])
 
   useEffect(() => {
     loadMovies()
   }, [loadMovies])
+
+  // Подгружаем каталог при первом входе в категорию «Доступно онлайн».
+  useEffect(() => {
+    if (selectedCategory === 'catalog' && catalogMovies.length === 0 && !loadingCatalog) {
+      loadCatalog()
+    }
+  }, [selectedCategory, catalogMovies.length, loadingCatalog, loadCatalog])
 
   // Поиск с debounce
   useEffect(() => {
@@ -228,9 +412,18 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
     return () => clearTimeout(timer)
   }, [searchQuery])
 
-  // Выбор фильма — открываем страницу фильма
+  // Выбор фильма — открываем страницу фильма (URL — источник истины через onMovieOpen)
   const handleMovieClick = (movie: TMDBMovie) => {
-    setMoviePageId(movie.id)
+    if (onMovieOpen) {
+      onMovieOpen({
+        id: movie.id,
+        title: movie.title,
+        originalTitle: movie.original_title,
+        year: movie.release_date
+      })
+    } else {
+      setMoviePageId(movie.id)
+    }
   }
 
   // Смена категории
@@ -240,12 +433,62 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
     setPage(1)
   }
 
-  // Смена жанра
+  // Смена жанра (мульти-выбор до 2 жанров)
   const handleGenreChange = (genreId: number) => {
-    setSelectedGenre(currentGenre => currentGenre === genreId ? null : genreId)
+    setSelectedGenres(current => {
+      if (current.includes(genreId)) {
+        return current.filter(id => id !== genreId)
+      }
+      if (current.length >= MAX_GENRES) {
+        // Заменяем самый старый выбор, чтобы всегда оставаться в пределах MAX_GENRES
+        return [...current.slice(1), genreId]
+      }
+      return [...current, genreId]
+    })
     setSearchQuery('')
     setPage(1)
   }
+
+  // Изменение года: следим, чтобы from <= to
+  const clampYear = (value: number) => Math.min(YEAR_MAX, Math.max(YEAR_MIN, value))
+  const handleYearFromSlider = (value: number) => {
+    const next = Math.min(value, yearTo)
+    setYearFrom(next)
+    setYearFromInput(String(next))
+    setPage(1)
+  }
+  const handleYearToSlider = (value: number) => {
+    const next = Math.max(value, yearFrom)
+    setYearTo(next)
+    setYearToInput(String(next))
+    setPage(1)
+  }
+  const commitYearFromInput = () => {
+    const num = parseInt(yearFromInput, 10)
+    if (!Number.isFinite(num)) { setYearFromInput(String(yearFrom)); return }
+    const next = Math.min(clampYear(num), yearTo)
+    setYearFrom(next)
+    setYearFromInput(String(next))
+    setPage(1)
+  }
+  const commitYearToInput = () => {
+    const num = parseInt(yearToInput, 10)
+    if (!Number.isFinite(num)) { setYearToInput(String(yearTo)); return }
+    const next = Math.max(clampYear(num), yearFrom)
+    setYearTo(next)
+    setYearToInput(String(next))
+    setPage(1)
+  }
+  const resetYearRange = () => {
+    setYearFrom(YEAR_MIN)
+    setYearTo(YEAR_MAX)
+    setYearFromInput(String(YEAR_MIN))
+    setYearToInput(String(YEAR_MAX))
+    setPage(1)
+  }
+  const yearActive = yearFrom > YEAR_MIN || yearTo < YEAR_MAX
+  const sliderLeftPct = ((yearFrom - YEAR_MIN) / (YEAR_MAX - YEAR_MIN)) * 100
+  const sliderRightPct = ((yearTo - YEAR_MIN) / (YEAR_MAX - YEAR_MIN)) * 100
 
   return (
     <div className="tmdb-library">
@@ -253,12 +496,26 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
       {moviePageId !== null ? (
         <MoviePage
           movieId={moviePageId}
-          onBack={() => setMoviePageId(null)}
+          onBack={() => {
+            if (onMovieClose) onMovieClose()
+            else setMoviePageId(null)
+          }}
           onSelectMovie={(movie) => {
             setMoviePageId(null)
             onSelectMovie(movie)
           }}
-          onNavigateToMovie={(id) => setMoviePageId(id)}
+          onNavigateToMovie={(sim) => {
+            if (onMovieOpen) {
+              onMovieOpen({
+                id: sim.id,
+                title: sim.title,
+                originalTitle: sim.original_title,
+                year: sim.release_date
+              })
+            } else {
+              setMoviePageId(sim.id)
+            }
+          }}
           onCreateRoom={onCreateRoom}
           favoriteIds={favoriteIds}
           onToggleFavorite={toggleFavorite}
@@ -272,18 +529,90 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
           <p className="tmdb-library__subtitle">Тысячи фильмов и сериалов для совместного просмотра с друзьями. Выбирайте, создавайте комнату и наслаждайтесь вместе.</p>
         </div>
 
-        {/* Категории */}
+        {/* Категории + фильтр по году */}
         {selectedCategory !== 'favorites' && (
-        <div className="tmdb-library__categories">
-          {movieCategories.map(cat => (
+        <div className="tmdb-library__controls">
+          <div className="tmdb-library__categories">
+            {movieCategories.map(cat => (
+              <button
+                key={cat.id}
+                className={`tmdb-library__category-btn ${selectedCategory === cat.id ? 'active' : ''}`}
+                onClick={() => handleCategoryChange(cat.id as CategoryType)}
+              >
+                {cat.name}
+              </button>
+            ))}
             <button
-              key={cat.id}
-              className={`tmdb-library__category-btn ${selectedCategory === cat.id ? 'active' : ''}`}
-              onClick={() => handleCategoryChange(cat.id as CategoryType)}
+              type="button"
+              className={`tmdb-library__category-btn tmdb-library__category-btn--catalog ${selectedCategory === 'catalog' ? 'active' : ''}`}
+              onClick={() => handleCategoryChange('catalog')}
+              title="Фильмы с подключённым источником воспроизведения"
             >
-              {cat.name}
+              <span className="tmdb-library__catalogStar" aria-hidden="true">✦</span>
+              Доступно онлайн
             </button>
-          ))}
+          </div>
+
+          <div className={`tmdb-library__yearFilter ${yearActive ? 'is-active' : ''}`}>
+            <span className="tmdb-library__yearLabel">Год:</span>
+            <div className="tmdb-library__yearSliderWrap">
+              <div className="tmdb-library__yearTrack" />
+              <div
+                className="tmdb-library__yearTrackActive"
+                style={{ left: `${sliderLeftPct}%`, right: `${100 - sliderRightPct}%` }}
+              />
+              <input
+                type="range"
+                min={YEAR_MIN}
+                max={YEAR_MAX}
+                value={yearFrom}
+                onChange={(e) => handleYearFromSlider(Number(e.target.value))}
+                className="tmdb-library__yearRange tmdb-library__yearRange--from"
+                aria-label="Год от (слайдер)"
+              />
+              <input
+                type="range"
+                min={YEAR_MIN}
+                max={YEAR_MAX}
+                value={yearTo}
+                onChange={(e) => handleYearToSlider(Number(e.target.value))}
+                className="tmdb-library__yearRange tmdb-library__yearRange--to"
+                aria-label="Год до (слайдер)"
+              />
+            </div>
+            <div className="tmdb-library__yearInputs">
+              <input
+                type="number"
+                min={YEAR_MIN}
+                max={YEAR_MAX}
+                className="tmdb-library__yearInput"
+                value={yearFromInput}
+                onChange={(e) => setYearFromInput(e.target.value)}
+                onBlur={commitYearFromInput}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                aria-label="Год от"
+              />
+              <span className="tmdb-library__yearDash">—</span>
+              <input
+                type="number"
+                min={YEAR_MIN}
+                max={YEAR_MAX}
+                className="tmdb-library__yearInput"
+                value={yearToInput}
+                onChange={(e) => setYearToInput(e.target.value)}
+                onBlur={commitYearToInput}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                aria-label="Год до"
+              />
+              {yearActive && (
+                <button type="button" className="tmdb-library__yearReset" onClick={resetYearRange} title="Сбросить" aria-label="Сбросить">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
         </div>
         )}
 
@@ -293,8 +622,9 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
           {movieGenres.map(genre => (
             <button
               key={genre.id}
-              className={`tmdb-library__genre-btn ${selectedGenre === genre.id ? 'active' : ''}`}
+              className={`tmdb-library__genre-btn ${selectedGenres.includes(genre.id) ? 'active' : ''}`}
               onClick={() => handleGenreChange(genre.id)}
+              title={selectedGenres.includes(genre.id) ? 'Убрать жанр' : (selectedGenres.length >= MAX_GENRES ? 'Можно выбрать до двух жанров — заменим самый старый' : 'Добавить жанр')}
             >
               {genre.name}
             </button>
@@ -359,6 +689,98 @@ export function TMDBLibrary({ onSelectMovie, showFavorites, initialMovieId, onCl
             ))}
           </div>
         )
+      ) : selectedCategory === 'catalog' ? (
+        // === Каталог: фильмы с подключённым источником ===
+        loadingCatalog && catalogMovies.length === 0 ? (
+          <div className="tmdb-library__loading">
+            <div className="tmdb-library__spinner" />
+            <p>Загрузка каталога...</p>
+          </div>
+        ) : (() => {
+          // Клиентская фильтрация по жанру/году (метадата приходит из TMDB).
+          const filteredCatalog = catalogMovies.filter(movie => {
+            if (selectedGenres.length > 0) {
+              // Совпадение по ВСЕМ выбранным жанрам (AND).
+              const hasAllGenres = selectedGenres.every(g => movie.genre_ids.includes(g))
+              if (!hasAllGenres) return false
+            }
+            if (yearActive) {
+              if (!movie.release_date) return false
+              const year = parseInt(movie.release_date.slice(0, 4), 10)
+              if (!Number.isFinite(year)) return false
+              if (year < yearFrom || year > yearTo) return false
+            }
+            return true
+          })
+
+          if (filteredCatalog.length === 0) {
+            return (
+              <div className="tmdb-library__empty">
+                <p>✦ В каталоге нет подходящих фильмов</p>
+                <p>Попробуйте изменить фильтры</p>
+              </div>
+            )
+          }
+
+          return (
+            <div className="tmdb-library__grid">
+              {filteredCatalog.map(movie => (
+                <div
+                  key={movie.id}
+                  className="tmdb-movie-card"
+                  onClick={() => handleMovieClick(movie)}
+                >
+                  <div className="tmdb-movie-card__poster">
+                    <img
+                      src={getPosterUrl(movie.poster_path)}
+                      alt={movie.title}
+                      loading="lazy"
+                    />
+                    <div className="tmdb-movie-card__overlay">
+                      <button className="tmdb-movie-card__play-btn">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+                      </button>
+                    </div>
+                    {movie.vote_average > 0 && (
+                      <div className="tmdb-movie-card__rating">⭐ {movie.vote_average.toFixed(1)}</div>
+                    )}
+                    {(() => {
+                      const type = catalogSourceTypes.get(movie.id) || ''
+                      const label = type === 'vkvideo' ? 'VK VIDEO' : (type ? type.toUpperCase() : 'ОНЛАЙН')
+                      return (
+                        <div className="tmdb-movie-card__sourceBadge" title={`Источник: ${label}`}>
+                          {label}
+                        </div>
+                      )
+                    })()}
+                    {token && (
+                      <button
+                        className={`tmdb-movie-card__fav-btn ${favoriteIds.has(String(movie.id)) ? 'tmdb-movie-card__fav-btn--active' : ''}`}
+                        onClick={(e) => toggleFavorite(e, movie)}
+                        title={favoriteIds.has(String(movie.id)) ? 'Убрать из избранного' : 'В избранное'}
+                      >
+                        <svg viewBox="0 0 24 24" width="20" height="20"
+                          fill={favoriteIds.has(String(movie.id)) ? '#ef4444' : 'none'}
+                          stroke={favoriteIds.has(String(movie.id)) ? '#ef4444' : 'currentColor'}
+                          strokeWidth="2"
+                        >
+                          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  <div className="tmdb-movie-card__info">
+                    <h3 className="tmdb-movie-card__title">{movie.title}</h3>
+                    <div className="tmdb-movie-card__meta">
+                      <span>{movie.release_date ? formatReleaseDate(movie.release_date) : 'Доступно'}</span>
+                      <span>{movie.genre_ids.slice(0, 2).map(id => getGenreName(id)).join(', ')}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        })()
       ) : loading ? (
         <div className="tmdb-library__loading">
           <div className="tmdb-library__spinner" />

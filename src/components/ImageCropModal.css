@@ -12,11 +12,13 @@
 
 .crop-modal {
   background: #1a1a1e;
-  border-radius: 12px;
-  width: 480px;
-  max-width: 95vw;
+  border-radius: 16px;
+  width: 640px;
+  max-width: min(95vw, 720px);
   overflow: hidden;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
 }
 
 /* ===== HEADER ===== */
@@ -72,7 +74,8 @@
 .crop-modal__area {
   position: relative;
   width: 100%;
-  height: 350px;
+  height: min(70vh, 520px);
+  min-height: 360px;
   overflow: hidden;
   cursor: grab;
   background: #000;
@@ -106,15 +109,23 @@
 .crop-modal__mask-bottom {
   background: rgba(0, 0, 0, 0.6);
   flex-shrink: 0;
+  width: 100%;
+}
+
+.crop-modal__mask-side {
+  background: rgba(0, 0, 0, 0.6);
+  flex-shrink: 0;
+  align-self: stretch;
 }
 
 .crop-modal__mask-center {
   display: flex;
   flex-shrink: 0;
+  width: 100%;
 }
 
 .crop-modal__viewport {
-  width: 100%;
+  flex: 1 1 auto;
   height: 100%;
   border: 2px solid rgba(255, 255, 255, 0.5);
   box-sizing: border-box;
@@ -126,9 +137,10 @@
   border: 2px solid rgba(255, 255, 255, 0.6);
 }
 
-/* For circle mode, hide top/bottom masks — the box-shadow handles it */
+/* For circle mode, hide top/bottom/side masks — the box-shadow handles it */
 .crop-modal__area--circle .crop-modal__mask-top,
-.crop-modal__area--circle .crop-modal__mask-bottom {
+.crop-modal__area--circle .crop-modal__mask-bottom,
+.crop-modal__area--circle .crop-modal__mask-side {
   background: transparent;
 }
 
@@ -136,10 +148,10 @@
 .crop-modal__controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
+  gap: 14px;
+  padding: 18px 24px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .crop-modal__slider {
@@ -171,4 +183,14 @@
   cursor: pointer;
   border: none;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 480px) {
+  .imageCropOverlay { padding: 12px; }
+  .imageCropModal { max-width: 100%; border-radius: 14px; padding: 14px; }
+  .imageCropModal__title { font-size: 15px; }
+  .imageCropModal__footer { flex-direction: column-reverse; gap: 8px; }
+  .imageCropModal__footer button { width: 100%; }
+  .imageCropModal__zoomRow { gap: 8px; }
 }

@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useSocket } from '../contexts/SocketContext'
 import { API_URL } from '../config/api'
 import { getMovieDetails, getPosterUrl, searchMovies, type TMDBMovie, type TMDBMovieDetails } from '../services/tmdb'
+import { buildMovieSlug } from '../utils/movieSlug'
 import './Room.css'
 import './Rooms.css'
 
@@ -38,13 +39,15 @@ type CreateWatchMode = 'solo' | 'room'
 
 export default function Rooms() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { user, logout } = useAuth()
   const { createRoom, currentRoomId } = useSocket()
   const roomClosedNotice = searchParams.get('closed') === '1'
   const roomSoloNotice = searchParams.get('solo') === '1'
+  const autoOpenCreateLink = searchParams.get('create') === 'link'
 
   const [rooms, setRooms] = useState<RoomInfo[]>([])
+  const [onlineUsers, setOnlineUsers] = useState(0)
   const [movieDetails, setMovieDetails] = useState<Record<string, TMDBMovieDetails>>({})
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -60,11 +63,69 @@ export default function Rooms() {
   const [createModalError, setCreateModalError] = useState('')
   const createSearchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
 
+  // Header search (interactive)
+  const [headerSearchQuery, setHeaderSearchQuery] = useState('')
+  const [headerSearchResults, setHeaderSearchResults] = useState<TMDBMovie[]>([])
+  const [headerSearching, setHeaderSearching] = useState(false)
+  const [showHeaderResults, setShowHeaderResults] = useState(false)
+  const headerSearchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  useEffect(() => {
+    const query = headerSearchQuery.trim()
+    if (!query || query.length < 2) {
+      setHeaderSearchResults([])
+      setHeaderSearching(false)
+      setShowHeaderResults(false)
+      return
+    }
+
+    clearTimeout(headerSearchTimer.current)
+    setHeaderSearching(true)
+
+    headerSearchTimer.current = setTimeout(async () => {
+      try {
+        const response = await searchMovies(query, 1)
+        setHeaderSearchResults(response.results.slice(0, 5))
+        setShowHeaderResults(response.results.length > 0)
+      } catch {
+        setHeaderSearchResults([])
+      } finally {
+        setHeaderSearching(false)
+      }
+    }, 400)
+
+    return () => clearTimeout(headerSearchTimer.current)
+  }, [headerSearchQuery])
+
+  const handleHeaderSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+  }
+
+  const handleHeaderSearchSelect = (movie: TMDBMovie) => {
+    setHeaderSearchQuery('')
+    setHeaderSearchResults([])
+    setShowHeaderResults(false)
+    const slug = buildMovieSlug({
+      id: movie.id,
+      title: movie.title,
+      originalTitle: movie.original_title,
+      year: movie.release_date
+    })
+    navigate(`/library/${slug}`)
+  }
+
   const fetchRooms = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/rooms`)
-      const data = await res.json()
-      setRooms(data.rooms || [])
+      const [roomsRes, presenceRes] = await Promise.all([
+        fetch(`${API_URL}/rooms`),
+        fetch(`${API_URL}/presence/online`)
+      ])
+      const roomsData = await roomsRes.json()
+      setRooms(roomsData.rooms || [])
+      if (presenceRes.ok) {
+        const presenceData = await presenceRes.json()
+        setOnlineUsers(Number(presenceData.online) || 0)
+      }
     } catch (err) {
       console.error('Failed to fetch rooms:', err)
     } finally {
@@ -148,6 +209,24 @@ export default function Rooms() {
     setShowCreateModal(true)
   }
 
+  // Open create modal in URL mode if ?create=link is present in URL (deep link from header)
+  useEffect(() => {
+    if (!autoOpenCreateLink || showCreateModal) return
+    setCreateSource('link')
+    setCreateWatchMode('room')
+    setNewRoomPrivate(false)
+    setCreateSearchQuery('')
+    setCreateSearchResults([])
+    setSelectedCreateMovie(null)
+    setCreateUrlInput('')
+    setCreateModalError('')
+    setShowCreateModal(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('create')
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenCreateLink])
+
   const closeCreateModal = () => {
     setShowCreateModal(false)
     setCreateSource('search')
@@ -210,7 +289,7 @@ export default function Rooms() {
   }
 
   const publicRoomsCount = rooms.filter(room => !room.isPrivate).length
-  const activeViewersCount = rooms.reduce((total, room) => total + room.usersCount, 0)
+  const activeViewersCount = onlineUsers
   const liveRoomsCount = rooms.filter(room => room.video?.isPlaying).length
 
   return (
@@ -218,20 +297,29 @@ export default function Rooms() {
       {/* Header — same as Room page */}
       <AppHeader
           onLogoClick={() => navigate('/')}
-          onRoomsClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : navigate('/rooms')}
+          onRoomsClick={() => navigate('/rooms')}
           roomsOnline={Boolean(currentRoomId)}
-          onLibraryClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : undefined}
+          roomsActive
+          roomsLocked={!user || user.isGuest}
+          onLibraryClick={() => navigate('/library')}
           libraryActive={false}
-          onPlayerClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : undefined}
+          onPlayerClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : navigate('/library')}
           playerDisabled={!currentRoomId}
-          showFavoriteButton={Boolean(user && !user.isGuest)}
-          onFavoriteClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : undefined}
-          favoriteDisabled={!currentRoomId}
-          onLinkClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : undefined}
-          linkDisabled={!currentRoomId}
+          playerTitle={currentRoomId ? 'Вернуться в комнату' : 'Нет активной комнаты'}
+          showFavoriteButton
+          favoriteLocked={!user || user.isGuest}
+          onFavoriteClick={() => navigate('/library?favorites=1')}
           search={{
-            mode: 'readonly',
-            onClick: () => currentRoomId ? navigate(`/room/${currentRoomId}`) : undefined,
+            mode: 'interactive',
+            value: headerSearchQuery,
+            onChange: setHeaderSearchQuery,
+            onSubmit: handleHeaderSearchSubmit,
+            onFocus: () => headerSearchResults.length > 0 && setShowHeaderResults(true),
+            results: headerSearchResults,
+            showResults: showHeaderResults,
+            searching: headerSearching,
+            onCloseResults: () => setShowHeaderResults(false),
+            onSelectResult: handleHeaderSearchSelect,
             placeholder: 'Фильмы, сериалы, актёры...'
           }}
           user={user}
@@ -330,7 +418,7 @@ export default function Rooms() {
             <h3>Нет активных комнат</h3>
             <p>Создайте первую комнату, включите фильм и отправьте ссылку друзьям. Здесь сразу появятся активные совместные просмотры.</p>
             <div className="rooms-page__emptyActions">
-              <button className="rooms-page__secondaryBtn" onClick={() => navigate(currentRoomId ? `/room/${currentRoomId}` : '/room?view=library')}>
+              <button className="rooms-page__secondaryBtn" onClick={() => navigate('/library')}>
                 Перейти в библиотеку
               </button>
             </div>

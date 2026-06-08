@@ -168,6 +168,120 @@
   color: rgba(255, 255, 255, 0.3);
 }
 
+/* Validation states */
+.auth-input-group--error {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.auth-input-group--error:focus-within {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.auth-input-group--error .auth-input-group__icon {
+  color: #f87171;
+}
+
+.auth-input-group--error:focus-within .auth-input-group__icon {
+  color: #ef4444;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-field-error {
+  font-size: 12.5px;
+  color: #f87171;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.35;
+}
+
+.auth-field-error::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #f87171;
+  flex-shrink: 0;
+}
+
+/* Password show/hide toggle */
+.auth-input-group__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  padding: 0;
+  margin: -4px -4px -4px 0;
+  border-radius: 8px;
+  transition: color 0.15s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.auth-input-group__toggle:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.auth-input-group__toggle:focus-visible {
+  outline: 2px solid rgba(245, 158, 11, 0.5);
+  outline-offset: 1px;
+}
+
+/* Password strength meter */
+.auth-strength {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.auth-strength__bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.auth-strength__bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.2s ease, background 0.2s ease;
+}
+
+.auth-strength__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  min-width: 64px;
+  text-align: right;
+}
+
+.auth-strength--s1 .auth-strength__bar span { width: 25%; background: #ef4444; }
+.auth-strength--s1 .auth-strength__label { color: #ef4444; }
+
+.auth-strength--s2 .auth-strength__bar span { width: 50%; background: #f59e0b; }
+.auth-strength--s2 .auth-strength__label { color: #f59e0b; }
+
+.auth-strength--s3 .auth-strength__bar span { width: 75%; background: #84cc16; }
+.auth-strength--s3 .auth-strength__label { color: #84cc16; }
+
+.auth-strength--s4 .auth-strength__bar span { width: 100%; background: #22c55e; }
+.auth-strength--s4 .auth-strength__label { color: #22c55e; }
+
 /* Forgot password */
 .auth-forgot {
   align-self: flex-end;
@@ -446,26 +560,104 @@
 
   .auth-left {
     background: #111113;
+    padding: 80px 28px 28px;
   }
 
   .auth-logo {
-    position: static;
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
     justify-content: center;
-    margin-bottom: 32px;
   }
 }
 
 @media (max-width: 480px) {
+  .auth-page {
+    min-height: 100dvh;
+  }
+
   .auth-left {
-    padding: 24px 20px;
+    padding: 72px 16px 24px;
+    justify-content: flex-start;
+  }
+
+  .auth-logo {
+    top: 16px;
+    font-size: 18px;
+  }
+
+  .auth-logo__star {
+    font-size: 20px;
   }
 
   .auth-heading {
     font-size: 22px;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
   }
 
   .auth-left__inner {
     max-width: 100%;
+  }
+
+  .auth-form {
+    gap: 12px;
+  }
+
+  .auth-input-group {
+    padding: 12px 14px;
+    border-radius: 10px;
+  }
+
+  .auth-input-group__field {
+    font-size: 14px;
+  }
+
+  .auth-input-group__toggle {
+    width: 32px;
+    height: 32px;
+  }
+
+  .auth-submit {
+    padding: 13px 20px;
+    font-size: 14px;
+  }
+
+  .auth-terms-text {
+    font-size: 12px;
+  }
+
+  .auth-switch {
+    margin-top: 22px;
+    font-size: 13px;
+  }
+
+  .auth-footer {
+    font-size: 11px;
+    padding: 16px 12px;
+  }
+
+  .auth-strength__label {
+    font-size: 11px;
+    min-width: 58px;
+  }
+
+  .auth-field-error {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 360px) {
+  .auth-left {
+    padding: 64px 12px 20px;
+  }
+
+  .auth-heading {
+    font-size: 20px;
+  }
+
+  .auth-input-group {
+    padding: 10px 12px;
+    gap: 8px;
   }
 }

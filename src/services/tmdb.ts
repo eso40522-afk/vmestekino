@@ -121,30 +121,85 @@ async function fetchTMDB<T>(endpoint: string, params: Record<string, string> = {
   return response.json()
 }
 
+// Фильтр: показываем только фильмы с кириллическим названием.
+const CYRILLIC_RE = /[А-яЁё]/
+// Чёрный список слов в названии (порно/эротика/18+).
+const BLOCKED_TITLE_RE = /(порно|секс|эрот|оргия|оргии|интим|18\+|xxx|порн)/i
+// Минимальный порог оценки и количества голосов — отсеивает мусорные/непопулярные фильмы.
+const MIN_VOTE_COUNT = 50
+const MIN_VOTE_AVG = 5
+export function hasCyrillicTitle(movie: { title?: string | null }): boolean {
+  return Boolean(movie?.title && CYRILLIC_RE.test(movie.title))
+}
+export function isAllowedMovie(movie: TMDBMovie): boolean {
+  if (movie.adult) return false
+  if (!hasCyrillicTitle(movie)) return false
+  if (movie.title && BLOCKED_TITLE_RE.test(movie.title)) return false
+  if (movie.original_title && BLOCKED_TITLE_RE.test(movie.original_title)) return false
+  if ((movie.vote_count ?? 0) < MIN_VOTE_COUNT) return false
+  if ((movie.vote_average ?? 0) < MIN_VOTE_AVG) return false
+  return true
+}
+function filterCyrillicResponse(response: TMDBResponse): TMDBResponse {
+  const filtered = (response.results || []).filter(isAllowedMovie)
+  return { ...response, results: filtered }
+}
+async function fetchTMDBList(endpoint: string, params: Record<string, string> = {}): Promise<TMDBResponse> {
+  const data = await fetchTMDB<TMDBResponse>(endpoint, params)
+  return filterCyrillicResponse(data)
+}
+
 // Получить популярные фильмы
 export async function getPopularMovies(page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>('/movie/popular', { page: page.toString() })
+  return fetchTMDBList('/movie/popular', { page: page.toString() })
 }
 
 // Получить топ рейтинга
 export async function getTopRatedMovies(page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>('/movie/top_rated', { page: page.toString() })
+  return fetchTMDBList('/movie/top_rated', { page: page.toString() })
 }
 
-// Получить сейчас в кино
+function toDateParam(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+// Получить сейчас в кино — точная фильтрация по дате выхода через discover.
+// Берём фильмы, вышедшие за последние ~45 дней и до сегодня.
 export async function getNowPlayingMovies(page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>('/movie/now_playing', { page: page.toString() })
+  const today = new Date()
+  const start = new Date(today)
+  start.setDate(today.getDate() - 45)
+  return fetchTMDBList('/discover/movie', {
+    page: page.toString(),
+    sort_by: 'popularity.desc',
+    'primary_release_date.gte': toDateParam(start),
+    'primary_release_date.lte': toDateParam(today),
+    with_release_type: '2|3',
+    include_adult: 'false'
+  })
 }
 
-// Получить скоро в кино
+// Получить скоро в кино — фильмы с датой выхода строго в будущем.
 export async function getUpcomingMovies(page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>('/movie/upcoming', { page: page.toString() })
+  const today = new Date()
+  const tomorrow = new Date(today)
+  tomorrow.setDate(today.getDate() + 1)
+  const horizon = new Date(today)
+  horizon.setMonth(today.getMonth() + 6)
+  return fetchTMDBList('/discover/movie', {
+    page: page.toString(),
+    sort_by: 'primary_release_date.asc',
+    'primary_release_date.gte': toDateParam(tomorrow),
+    'primary_release_date.lte': toDateParam(horizon),
+    with_release_type: '2|3',
+    include_adult: 'false'
+  })
 }
 
 // Поиск фильмов
 export async function searchMovies(query: string, page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>('/search/movie', { 
-    query, 
+  return fetchTMDBList('/search/movie', {
+    query,
     page: page.toString(),
     include_adult: 'false'
   })
@@ -153,6 +208,119 @@ export async function searchMovies(query: string, page: number = 1): Promise<TMD
 // Получить детали фильма
 export async function getMovieDetails(movieId: number): Promise<TMDBMovieDetails> {
   return fetchTMDB<TMDBMovieDetails>(`/movie/${movieId}`)
+}
+
+// Видео (трейлеры, тизеры) с YouTube
+export interface TMDBVideo {
+  id: string
+  key: string
+  name: string
+  site: string // 'YouTube' | 'Vimeo'
+  type: string // 'Trailer' | 'Teaser' | 'Clip' | 'Featurette' | ...
+  official: boolean
+  size: number
+  iso_639_1: string
+  published_at: string
+}
+
+export interface TMDBVideosResponse {
+  id: number
+  results: TMDBVideo[]
+}
+
+// Унифицированный трейлер для UI:
+// - 'rutube': embed-iframe с RuTube (работает в РФ без VPN)
+// - 'youtube': классический YouTube embed (fallback)
+// - 'direct':  прямая ссылка на mp4 (Kinopoisk/Yandex CDN)
+export interface UnifiedTrailer {
+  kind: 'rutube' | 'youtube' | 'direct'
+  /** YouTube key — присутствует только при kind === 'youtube' */
+  key?: string
+  /** Прямая ссылка / RuTube embed URL */
+  url?: string
+  name: string
+  /** Метка источника для отладки и UI ("RuTube" / "YouTube" / "Кинопоиск") */
+  source: string
+}
+
+// Получить список видео для фильма. Пробуем сначала русские,
+// затем fallback на английские, если русских нет.
+export async function getMovieVideos(movieId: number): Promise<TMDBVideo[]> {
+  const ru = await fetchTMDB<TMDBVideosResponse>(`/movie/${movieId}/videos`)
+  if (ru.results && ru.results.length > 0) return ru.results
+  try {
+    const url = new URL(`${API_URL}/tmdb`)
+    url.searchParams.append('endpoint', `/movie/${movieId}/videos`)
+    url.searchParams.append('language', 'en-US')
+    const response = await fetch(url.toString())
+    if (!response.ok) return []
+    const en = (await response.json()) as TMDBVideosResponse
+    return en.results || []
+  } catch {
+    return []
+  }
+}
+
+// Выбрать лучший трейлер: официальный YouTube Trailer > любой Trailer > Teaser > первый Clip.
+export function pickBestTrailer(videos: TMDBVideo[]): TMDBVideo | null {
+  if (!videos || videos.length === 0) return null
+  const yt = videos.filter(v => v.site === 'YouTube')
+  if (yt.length === 0) return null
+  const officialTrailer = yt.find(v => v.type === 'Trailer' && v.official)
+  if (officialTrailer) return officialTrailer
+  const anyTrailer = yt.find(v => v.type === 'Trailer')
+  if (anyTrailer) return anyTrailer
+  const teaser = yt.find(v => v.type === 'Teaser')
+  if (teaser) return teaser
+  return yt[0]
+}
+
+// Получить трейлеры через наш backend (RuTube > Kinopoisk).
+// Backend: GET /api/movie-trailers/:tmdbId -> { videos: [{ url, name, site }], source }
+export async function getRussianTrailers(movieId: number): Promise<UnifiedTrailer[]> {
+  try {
+    const response = await fetch(`${API_URL}/movie-trailers/${movieId}`)
+    if (!response.ok) return []
+    const data = (await response.json()) as {
+      videos?: Array<{ url: string; name: string; site: string }>
+    }
+    if (!Array.isArray(data.videos)) return []
+    return data.videos.map(v => {
+      const site = String(v.site || '').toUpperCase()
+      if (site === 'RUTUBE') {
+        return {
+          kind: 'rutube' as const,
+          url: v.url,
+          name: v.name || 'Трейлер',
+          source: 'RuTube'
+        }
+      }
+      const label = site === 'KINOPOISK' ? 'Кинопоиск'
+        : site === 'YANDEX_DISK' ? 'Яндекс.Диск'
+        : site || 'Прямая ссылка'
+      return {
+        kind: 'direct' as const,
+        url: v.url,
+        name: v.name || 'Трейлер',
+        source: label
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+// Единая точка получения лучшего трейлера:
+// сначала RuTube/Кинопоиск (работает в РФ), и только если пусто — fallback на YouTube.
+export async function getBestUnifiedTrailer(movieId: number): Promise<UnifiedTrailer | null> {
+  const russian = await getRussianTrailers(movieId)
+  if (russian.length > 0) return russian[0]
+  const tmdbVideos = await getMovieVideos(movieId)
+  const yt = pickBestTrailer(tmdbVideos)
+  if (yt) {
+    return { kind: 'youtube', key: yt.key, name: yt.name, source: 'YouTube' }
+  }
+  return null
 }
 
 // Получить внешние ID (включая Kinopoisk)
@@ -195,7 +363,7 @@ export async function getKinopoiskId(tmdbId: number, imdbId?: string): Promise<s
 
 // Получить похожие фильмы
 export async function getSimilarMovies(movieId: number, page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>(`/movie/${movieId}/similar`, { page: page.toString() })
+  return fetchTMDBList(`/movie/${movieId}/similar`, { page: page.toString() })
 }
 
 // Актёрский состав
@@ -230,19 +398,41 @@ export async function getMoviesByGenre(
   page: number = 1,
   category: MovieFilterCategory = 'popular'
 ): Promise<TMDBResponse> {
-  const today = new Date()
-  const releaseStart = new Date(today)
-  const releaseEnd = new Date(today)
+  return discoverMovies({ genreId, page, category })
+}
 
-  releaseStart.setDate(today.getDate() - 60)
-  releaseEnd.setDate(today.getDate() + 30)
+// Универсальный discover с поддержкой одного или нескольких жанров, категории и диапазона годов.
+export async function discoverMovies(opts: {
+  genreId?: number | null
+  genreIds?: number[] | null
+  page?: number
+  category?: MovieFilterCategory
+  yearFrom?: number | null
+  yearTo?: number | null
+}): Promise<TMDBResponse> {
+  const { genreId, genreIds, page = 1, category = 'popular', yearFrom, yearTo } = opts
+  const today = new Date()
+  const nowStart = new Date(today)
+  const upcomingEnd = new Date(today)
+
+  nowStart.setDate(today.getDate() - 45)
+  upcomingEnd.setMonth(today.getMonth() + 6)
 
   const formatDateParam = (date: Date) => date.toISOString().slice(0, 10)
 
   const params: Record<string, string> = {
-    with_genres: genreId.toString(),
     page: page.toString(),
-    sort_by: 'popularity.desc'
+    sort_by: 'popularity.desc',
+    include_adult: 'false'
+  }
+
+  // TMDB: запятая = AND, вертикальная черта = OR. Используем AND, чтобы
+  // выборка по двум жанрам сужала результаты, а не расширяла их.
+  const genreList = (genreIds && genreIds.length > 0 ? genreIds : (genreId ? [genreId] : []))
+    .filter(id => Number.isFinite(id))
+    .map(id => String(id))
+  if (genreList.length > 0) {
+    params.with_genres = genreList.join(',')
   }
 
   if (category === 'top_rated') {
@@ -251,20 +441,34 @@ export async function getMoviesByGenre(
   }
 
   if (category === 'now_playing') {
-    params['primary_release_date.gte'] = formatDateParam(releaseStart)
-    params['primary_release_date.lte'] = formatDateParam(releaseEnd)
+    params['primary_release_date.gte'] = formatDateParam(nowStart)
+    params['primary_release_date.lte'] = formatDateParam(today)
+    params.with_release_type = '2|3'
   }
 
   if (category === 'upcoming') {
-    params['primary_release_date.gte'] = formatDateParam(today)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(today.getDate() + 1)
+    params['primary_release_date.gte'] = formatDateParam(tomorrow)
+    params['primary_release_date.lte'] = formatDateParam(upcomingEnd)
+    params.sort_by = 'primary_release_date.asc'
+    params.with_release_type = '2|3'
   }
 
-  return fetchTMDB<TMDBResponse>('/discover/movie', params)
+  // Диапазон годов имеет приоритет над авто-датами категорий now_playing/upcoming.
+  if (yearFrom) {
+    params['primary_release_date.gte'] = `${yearFrom}-01-01`
+  }
+  if (yearTo) {
+    params['primary_release_date.lte'] = `${yearTo}-12-31`
+  }
+
+  return fetchTMDBList('/discover/movie', params)
 }
 
 // Получить лучшие фильмы по жанру (для рекомендаций)
 export async function getTopRatedByGenre(genreId: number, page: number = 1): Promise<TMDBResponse> {
-  return fetchTMDB<TMDBResponse>('/discover/movie', {
+  return fetchTMDBList('/discover/movie', {
     with_genres: genreId.toString(),
     page: page.toString(),
     sort_by: 'vote_average.desc',
@@ -287,9 +491,7 @@ export async function getGenres(): Promise<TMDBGenre[]> {
 // Категории для фильтрации
 export const movieCategories = [
   { id: 'popular', name: 'Популярные', fetch: getPopularMovies },
-  { id: 'top_rated', name: 'Лучшие', fetch: getTopRatedMovies },
-  { id: 'now_playing', name: 'Сейчас в кино', fetch: getNowPlayingMovies },
-  { id: 'upcoming', name: 'Скоро', fetch: getUpcomingMovies }
+  { id: 'top_rated', name: 'Лучшие', fetch: getTopRatedMovies }
 ]
 
 // Жанры для фильтрации

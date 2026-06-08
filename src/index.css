@@ -20,6 +20,9 @@ body {
   min-width: 320px;
   min-height: 100vh;
   min-height: 100dvh;
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
 }
 
 img,
@@ -35,5 +38,11 @@ h1, h2, h3, h4, h5, h6, p {
 }
 
 button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
   font-family: inherit;
 }

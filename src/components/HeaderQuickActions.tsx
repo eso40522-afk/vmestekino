@@ -4,6 +4,7 @@ export interface HeaderQuickActionsProps {
   showRoomsButton?: boolean
   roomsOnline?: boolean
   roomsLocked?: boolean
+  roomsActive?: boolean
   roomsTitle?: string
   onLibraryClick: () => void
   libraryActive?: boolean
@@ -17,9 +18,22 @@ export interface HeaderQuickActionsProps {
   favoriteDisabled?: boolean
   favoriteLocked?: boolean
   favoriteTitle?: string
-  onLinkClick: () => void
+  onLinkClick?: () => void
+  linkActive?: boolean
   linkDisabled?: boolean
   linkTitle?: string
+  // Социальные действия
+  showSocialButtons?: boolean
+  onFriendsClick?: () => void
+  friendsActive?: boolean
+  friendsBadge?: number
+  friendsLocked?: boolean
+  friendsTitle?: string
+  onMessagesClick?: () => void
+  messagesActive?: boolean
+  messagesBadge?: number
+  messagesLocked?: boolean
+  messagesTitle?: string
 }
 
 function LogoIcon() {
@@ -76,12 +90,32 @@ function RoomsIcon() {
   )
 }
 
+function FriendsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  )
+}
+
+function MessagesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+    </svg>
+  )
+}
+
 export default function HeaderQuickActions({
   onLogoClick,
   onRoomsClick,
   showRoomsButton = true,
   roomsOnline = true,
   roomsLocked = false,
+  roomsActive = false,
   roomsTitle = 'Комнаты',
   onLibraryClick,
   libraryActive = false,
@@ -96,9 +130,24 @@ export default function HeaderQuickActions({
   favoriteLocked = false,
   favoriteTitle = 'Избранное',
   onLinkClick,
+  linkActive = false,
   linkDisabled = false,
-  linkTitle = 'Вставить ссылку'
+  linkTitle = 'Вставить ссылку',
+  showSocialButtons = false,
+  onFriendsClick,
+  friendsActive = false,
+  friendsBadge = 0,
+  friendsLocked = false,
+  friendsTitle = 'Друзья',
+  onMessagesClick,
+  messagesActive = false,
+  messagesBadge = 0,
+  messagesLocked = false,
+  messagesTitle = 'Личные сообщения'
 }: HeaderQuickActionsProps) {
+  const friendsCount = Math.max(0, Number(friendsBadge) || 0)
+  const messagesCount = Math.max(0, Number(messagesBadge) || 0)
+
   return (
     <div className="room__headerLeft">
       <a href="#" className="room__logo" onClick={(event) => { event.preventDefault(); onLogoClick() }}>
@@ -108,7 +157,7 @@ export default function HeaderQuickActions({
 
       {showRoomsButton && (
         <div
-          className={`room__roomId${roomsLocked ? ' room__iconBtn--locked' : ''}${!roomsOnline && !roomsLocked ? ' room__roomId--inactive' : ''}`}
+          className={`room__roomId${roomsLocked ? ' room__iconBtn--locked' : ''}${!roomsOnline && !roomsLocked ? ' room__roomId--inactive' : ''}${roomsActive && !roomsLocked ? ' room__roomId--active' : ''}`}
           onClick={() => !roomsLocked && onRoomsClick?.()}
           style={{ cursor: roomsLocked ? 'default' : 'pointer' }}
           title={roomsLocked ? 'Авторизуйтесь для доступа' : 'Все комнаты'}
@@ -147,9 +196,65 @@ export default function HeaderQuickActions({
             </button>
           )
         )}
-        <button className="room__iconBtn" title={linkTitle} onClick={onLinkClick} disabled={linkDisabled} type="button">
+        <button className={`room__iconBtn ${linkActive ? 'active' : ''}`} title={linkTitle} onClick={onLinkClick} disabled={linkDisabled} type="button">
           <LinkIcon />
         </button>
+
+        {showSocialButtons && (onFriendsClick || friendsLocked) && (
+          friendsLocked ? (
+            <button
+              className="room__iconBtn room__iconBtn--social room__iconBtn--locked"
+              title={friendsTitle}
+              onClick={() => {}}
+              type="button"
+            >
+              <FriendsIcon />
+              <span className="room__lockIcon"><LockBadge /></span>
+            </button>
+          ) : (
+            <button
+              className={`room__iconBtn room__iconBtn--social ${friendsActive ? 'active' : ''}`}
+              title={friendsTitle}
+              onClick={onFriendsClick}
+              type="button"
+            >
+              <FriendsIcon />
+              {friendsCount > 0 && (
+                <span className="room__iconBadge" aria-label={`${friendsCount} новых заявок`}>
+                  {friendsCount > 99 ? '99+' : friendsCount}
+                </span>
+              )}
+            </button>
+          )
+        )}
+
+        {showSocialButtons && (onMessagesClick || messagesLocked) && (
+          messagesLocked ? (
+            <button
+              className="room__iconBtn room__iconBtn--social room__iconBtn--locked"
+              title={messagesTitle}
+              onClick={() => {}}
+              type="button"
+            >
+              <MessagesIcon />
+              <span className="room__lockIcon"><LockBadge /></span>
+            </button>
+          ) : (
+            <button
+              className={`room__iconBtn room__iconBtn--social ${messagesActive ? 'active' : ''}`}
+              title={messagesTitle}
+              onClick={onMessagesClick}
+              type="button"
+            >
+              <MessagesIcon />
+              {messagesCount > 0 && (
+                <span className="room__iconBadge" aria-label={`${messagesCount} непрочитанных`}>
+                  {messagesCount > 99 ? '99+' : messagesCount}
+                </span>
+              )}
+            </button>
+          )
+        )}
       </div>
     </div>
   )

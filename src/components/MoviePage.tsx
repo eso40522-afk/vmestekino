@@ -4,9 +4,11 @@ import {
   type TMDBMovie,
   type TMDBCast,
   type TMDBCrew,
+  type UnifiedTrailer,
   getMovieDetails,
   getMovieExternalIds,
   getMovieCredits,
+  getBestUnifiedTrailer,
   getTopRatedByGenre,
   getPosterUrl,
   getBackdropUrl,
@@ -14,7 +16,7 @@ import {
   formatReleaseDate,
   formatRuntime,
 } from '../services/tmdb'
-import { buildEmbedUrl } from '../services/alloha'
+import { resolvePlaybackSource } from '../services/playbackSources'
 import { useAuth } from '../contexts/AuthContext'
 import { useSocket } from '../contexts/SocketContext'
 import type { SelectedMovieData } from './TMDBLibrary'
@@ -24,7 +26,7 @@ interface MoviePageProps {
   movieId: number
   onBack: () => void
   onSelectMovie: (movie: SelectedMovieData) => void
-  onNavigateToMovie: (movieId: number) => void
+  onNavigateToMovie: (movie: TMDBMovie) => void
   onCreateRoom?: (isPrivate: boolean) => void
   favoriteIds: Set<string>
   onToggleFavorite: (e: React.MouseEvent, movie: TMDBMovie) => void
@@ -44,6 +46,20 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
   const [watchModalClosing, setWatchModalClosing] = useState(false)
   const [watchMode, setWatchMode] = useState<'solo' | 'room'>('solo')
   const [roomPrivate, setRoomPrivate] = useState(false)
+  const [showNoSourceModal, setShowNoSourceModal] = useState(false)
+  const [noSourceModalClosing, setNoSourceModalClosing] = useState(false)
+  const [watchLoading, setWatchLoading] = useState(false)
+  const [trailer, setTrailer] = useState<UnifiedTrailer | null>(null)
+  const [showTrailerModal, setShowTrailerModal] = useState(false)
+  const [trailerModalClosing, setTrailerModalClosing] = useState(false)
+
+  const closeTrailerModal = () => {
+    setTrailerModalClosing(true)
+    setTimeout(() => {
+      setShowTrailerModal(false)
+      setTrailerModalClosing(false)
+    }, 250)
+  }
 
   const closeWatchModal = () => {
     setWatchModalClosing(true)
@@ -51,6 +67,14 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
       setShowWatchModal(false)
       setWatchModalClosing(false)
       setRoomPrivate(false)
+    }, 250)
+  }
+
+  const closeNoSourceModal = () => {
+    setNoSourceModalClosing(true)
+    setTimeout(() => {
+      setShowNoSourceModal(false)
+      setNoSourceModalClosing(false)
     }, 250)
   }
 
@@ -69,17 +93,20 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
 
   const loadMovie = async () => {
     setLoading(true)
+    setTrailer(null)
     try {
-      const [details, externalIds, credits] = await Promise.all([
+      const [details, externalIds, credits, bestTrailer] = await Promise.all([
         getMovieDetails(movieId),
         getMovieExternalIds(movieId),
         getMovieCredits(movieId),
+        getBestUnifiedTrailer(movieId).catch(() => null),
       ])
 
       setMovie(details)
       setImdbId(externalIds.imdb_id)
       setCast(credits.cast.slice(0, 4))
       setDirector(credits.crew.find(c => c.job === 'Director') || null)
+      setTrailer(bestTrailer)
 
       // Загружаем рекомендации по жанру
       const mainGenreId = details.genres?.[0]?.id
@@ -97,25 +124,59 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
     }
   }
 
-  const handleWatch = () => {
-    if (!movie || !imdbId) return
+  const handleWatch = async () => {
+    if (!movie || watchLoading) return
+
+    setWatchLoading(true)
+    let mappedSource: Awaited<ReturnType<typeof resolvePlaybackSource>> = null
+    try {
+      mappedSource = await resolvePlaybackSource(movie.id, imdbId)
+    } catch (err) {
+      console.error('resolvePlaybackSource failed', err)
+    } finally {
+      setWatchLoading(false)
+    }
+
+    // Only RuTube sources are supported.
+    if (!mappedSource || mappedSource.sourceType !== 'rutube' || !mappedSource.sourceUrl) {
+      setShowNoSourceModal(true)
+      return
+    }
+
     // Гости — сразу смотрят без модалки
     if (!token) {
-      const embedUrl = buildEmbedUrl(imdbId)
       onSelectMovie({
         ...movie,
-        videoUrl: embedUrl,
+        videoUrl: mappedSource.sourceUrl,
         kinopoiskId: null,
         imdbId: imdbId,
-        useEmbed: true,
+        useEmbed: false,
+        sourceType: 'rutube',
       })
       return
     }
     setShowWatchModal(true)
   }
 
-  const handleConfirmWatch = () => {
-    if (!movie || !imdbId) return
+  const handleConfirmWatch = async () => {
+    if (!movie || watchLoading) return
+
+    setWatchLoading(true)
+    let mappedSource: Awaited<ReturnType<typeof resolvePlaybackSource>> = null
+    try {
+      mappedSource = await resolvePlaybackSource(movie.id, imdbId)
+    } catch (err) {
+      console.error('resolvePlaybackSource failed', err)
+    } finally {
+      setWatchLoading(false)
+    }
+
+    if (!mappedSource || mappedSource.sourceType !== 'rutube' || !mappedSource.sourceUrl) {
+      closeWatchModal()
+      setShowNoSourceModal(true)
+      return
+    }
+
     setWatchModalClosing(true)
     setTimeout(() => {
       setShowWatchModal(false)
@@ -128,13 +189,13 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
     if (watchMode === 'solo') {
       setRoomSolo(true)
     }
-    const embedUrl = buildEmbedUrl(imdbId)
     onSelectMovie({
       ...movie,
-      videoUrl: embedUrl,
+      videoUrl: mappedSource.sourceUrl,
       kinopoiskId: null,
       imdbId: imdbId,
-      useEmbed: true,
+      useEmbed: false,
+      sourceType: 'rutube',
     })
   }
 
@@ -187,7 +248,7 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
         className="movie-page__hero"
         style={{
           backgroundImage: movie.backdrop_path
-            ? `url(${getBackdropUrl(movie.backdrop_path, 'original')})`
+            ? `url(${getBackdropUrl(movie.backdrop_path, 'w1280')})`
             : undefined,
         }}
       >
@@ -220,6 +281,20 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
               </svg>
               СМОТРЕТЬ
             </button>
+            {trailer && (
+              <button
+                className="movie-page__trailer-btn"
+                onClick={() => setShowTrailerModal(true)}
+                type="button"
+                title="Смотреть трейлер"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="23 7 16 12 23 17 23 7" />
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                </svg>
+                Трейлер
+              </button>
+            )}
             {token && (
               <button
                 className={`movie-page__fav-btn ${isFavorite ? 'movie-page__fav-btn--active' : ''}`}
@@ -312,7 +387,7 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
                 <div
                   key={sim.id}
                   className="movie-page__rec-card"
-                  onClick={() => onNavigateToMovie(sim.id)}
+                  onClick={() => onNavigateToMovie(sim)}
                 >
                   <img
                     src={getPosterUrl(sim.poster_path, 'w185')}
@@ -458,6 +533,85 @@ export function MoviePage({ movieId, onBack, onSelectMovie, onNavigateToMovie, o
                   Создать комнату
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* No-source modal */}
+      {showNoSourceModal && (
+        <div
+          className={`movie-page__modal-overlay${noSourceModalClosing ? ' movie-page__modal-overlay--closing' : ''}`}
+          onClick={closeNoSourceModal}
+        >
+          <div
+            className={`movie-page__modal movie-page__modal--noSource${noSourceModalClosing ? ' movie-page__modal--closing' : ''}`}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="movie-page__noSourceIcon" aria-hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="48" height="48">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="8" y1="12" x2="16" y2="12" />
+              </svg>
+            </div>
+            <h3 className="movie-page__noSourceTitle">Извините, фильм пока недоступен</h3>
+            <p className="movie-page__noSourceText">
+              К сожалению, в данный момент у нас нет источника для этого фильма.
+              Мы работаем над расширением каталога — попробуйте выбрать другой фильм.
+            </p>
+            <div className="movie-page__noSourceActions">
+              <button className="movie-page__modal-watch" onClick={closeNoSourceModal}>
+                Понятно
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trailer modal */}
+      {showTrailerModal && trailer && (
+        <div
+          className={`movie-page__modal-overlay${trailerModalClosing ? ' movie-page__modal-overlay--closing' : ''}`}
+          onClick={closeTrailerModal}
+        >
+          <div
+            className={`movie-page__modal movie-page__modal--trailer${trailerModalClosing ? ' movie-page__modal--closing' : ''}`}
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              className="movie-page__trailer-close"
+              onClick={closeTrailerModal}
+              type="button"
+              aria-label="Закрыть"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="movie-page__trailer-frame">
+              {trailer.kind === 'rutube' && trailer.url ? (
+                <iframe
+                  src={trailer.url}
+                  title={trailer.name || 'Трейлер'}
+                  allow="clipboard-write; autoplay"
+                  allowFullScreen
+                />
+              ) : trailer.kind === 'direct' && trailer.url ? (
+                <video
+                  src={trailer.url}
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                />
+              ) : trailer.kind === 'youtube' && trailer.key ? (
+                <iframe
+                  src={`https://www.youtube.com/embed/${trailer.key}?autoplay=1&rel=0`}
+                  title={trailer.name || 'Трейлер'}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              ) : null}
             </div>
           </div>
         </div>

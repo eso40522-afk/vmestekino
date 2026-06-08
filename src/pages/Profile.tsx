@@ -2,9 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth, type WatchedMovie } from '../contexts/AuthContext'
 import AppHeader from '../components/AppHeader'
+import ProfileFriendsSection from '../components/ProfileFriendsSection'
+import FriendsListModal from '../components/FriendsListModal'
 import { useSocket } from '../contexts/SocketContext'
 import { API_URL } from '../config/api'
 import { searchMovies, getPosterUrl, type TMDBMovie } from '../services/tmdb'
+import { GENRE_OPTIONS, getGenreOption } from '../data/genres'
 import ImageCropModal from '../components/ImageCropModal'
 import './Profile.css'
 import './Room.css'
@@ -21,12 +24,12 @@ interface FavoriteMovie {
 
 export default function Profile() {
   const navigate = useNavigate()
-  const { userId: paramUserId } = useParams<{ userId?: string }>()
+  const { userId: paramUserId, handle: paramHandle } = useParams<{ userId?: string, handle?: string }>()
   const { user, token, updateProfile, logout } = useAuth()
-  const { currentRoomId } = useSocket()
+  const { currentRoomId, friendsVersion } = useSocket()
 
-  // Если есть paramUserId и это не текущий пользователь — смотрим чужой профиль
-  const isOwnProfile = !paramUserId || paramUserId === user?.id
+  // Определяем режим: по id, по handle или собственный профиль
+  const hasParam = Boolean(paramUserId || paramHandle)
   const viewUserId = paramUserId || user?.id
 
   const [isEditing, setIsEditing] = useState(false)
@@ -34,6 +37,9 @@ export default function Profile() {
   const [editBio, setEditBio] = useState('')
   const [editAvatar, setEditAvatar] = useState('')
   const [editBanner, setEditBanner] = useState('')
+  const [editFavoriteGenres, setEditFavoriteGenres] = useState<number[]>([])
+  const [showFriendsListModal, setShowFriendsListModal] = useState(false)
+  const [profileFriendsCount, setProfileFriendsCount] = useState(0)
   const [cropImage, setCropImage] = useState('')
   const [cropType, setCropType] = useState<'avatar' | 'banner'>('avatar')
   const [showCropModal, setShowCropModal] = useState(false)
@@ -62,25 +68,47 @@ export default function Profile() {
 
   // Данные чужого профиля
   const [viewedProfile, setViewedProfile] = useState<{
-    username: string; bio: string; avatar: string; banner: string; color: string; createdAt: string
+    id: string; handle: string; username: string; bio: string; avatar: string; banner: string; color: string; createdAt: string; favoriteGenres: number[]
   } | null>(null)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+
+  // Определяем владельца по загруженным данным (более надёжно, чем из URL)
+  const isOwnProfile = !hasParam
+    ? true
+    : (viewedProfile ? viewedProfile.id === user?.id : (paramUserId ? paramUserId === user?.id : (paramHandle && user?.handle ? paramHandle.toLowerCase() === user.handle.toLowerCase() : false)))
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bannerInputRef = useRef<HTMLInputElement>(null)
 
   // Redirect if not logged in or guest (only for own profile without param)
   useEffect(() => {
-    if (!paramUserId && (!user || user.isGuest)) {
+    if (!paramUserId && !paramHandle && (!user || user.isGuest)) {
       navigate('/')
     }
-  }, [user, navigate, paramUserId])
+  }, [user, navigate, paramUserId, paramHandle])
 
   // Load profile data
   useEffect(() => {
-    if (viewUserId) {
+    if (viewUserId || paramHandle) {
       fetchProfile()
     }
-  }, [viewUserId, token])
+  }, [viewUserId, paramHandle, token])
+
+  // Загружаем кол-во друзей пользователя (для статы в шапке)
+  useEffect(() => {
+    const targetId = viewedProfile?.id || viewUserId
+    if (!targetId) return
+    let cancelled = false
+    fetch(`${API_URL}/friends/list/${targetId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!cancelled) {
+          setProfileFriendsCount(Array.isArray(data?.friends) ? data.friends.length : 0)
+        }
+      })
+      .catch(() => { if (!cancelled) setProfileFriendsCount(0) })
+    return () => { cancelled = true }
+  }, [viewUserId, viewedProfile?.id, friendsVersion])
 
   // Header search with debounce
   useEffect(() => {
@@ -103,11 +131,14 @@ export default function Profile() {
   }, [headerSearch])
 
   const fetchProfile = async () => {
-    if (!viewUserId) return
+    const endpoint = paramHandle
+      ? `${API_URL}/profile/by-handle/${encodeURIComponent(paramHandle)}`
+      : viewUserId ? `${API_URL}/profile/${viewUserId}` : null
+    if (!endpoint) return
     try {
       const headers: Record<string, string> = {}
       if (token) headers.Authorization = `Bearer ${token}`
-      const res = await fetch(`${API_URL}/profile/${viewUserId}`, { headers })
+      const res = await fetch(endpoint, { headers })
       const data = await res.json()
       if (data.profile) {
         setWatchedMovies(data.profile.watchedMovies || [])
@@ -115,19 +146,27 @@ export default function Profile() {
         if (data.profile.stats) {
           setProfileStats(data.profile.stats)
         }
-        if (!isOwnProfile) {
+        const isMine = user?.id && data.profile.id === user.id
+        if (!isMine) {
           setViewedProfile({
+            id: data.profile.id,
+            handle: data.profile.handle || '',
             username: data.profile.username,
             bio: data.profile.bio || '',
             avatar: data.profile.avatar || '',
             banner: data.profile.banner || '',
             color: data.profile.color || '#6366f1',
-            createdAt: data.profile.createdAt
+            createdAt: data.profile.createdAt,
+            favoriteGenres: Array.isArray(data.profile.favoriteGenres) ? data.profile.favoriteGenres : []
           })
+        } else {
+          setViewedProfile(null)
         }
       }
     } catch (err) {
       console.error('Error fetching profile:', err)
+    } finally {
+      setProfileLoaded(true)
     }
   }
 
@@ -137,6 +176,7 @@ export default function Profile() {
     setEditBio(user.bio || '')
     setEditAvatar(user.avatar || '')
     setEditBanner(user.banner || '')
+    setEditFavoriteGenres(Array.isArray(user.favoriteGenres) ? user.favoriteGenres.slice(0, 3) : [])
     setIsEditing(true)
   }
 
@@ -147,7 +187,8 @@ export default function Profile() {
         username: editUsername,
         bio: editBio,
         avatar: editAvatar,
-        banner: editBanner
+        banner: editBanner,
+        favoriteGenres: editFavoriteGenres
       })
       setIsEditing(false)
     } catch (err: any) {
@@ -156,6 +197,14 @@ export default function Profile() {
     } finally {
       setIsSaving(false)
     }
+  }
+
+  const toggleEditGenre = (id: number) => {
+    setEditFavoriteGenres(prev => {
+      if (prev.includes(id)) return prev.filter(g => g !== id)
+      if (prev.length >= 3) return prev
+      return [...prev, id]
+    })
   }
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -329,7 +378,7 @@ export default function Profile() {
     // Loading other user's profile or not found
     return (
       <div className="profile-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 16 }}>Загрузка профиля...</div>
+        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 16 }}>{profileLoaded ? 'Профиль не найден' : 'Загрузка профиля...'}</div>
       </div>
     )
   }
@@ -338,6 +387,8 @@ export default function Profile() {
 
   // Собираем данные профиля: свой или чужой
   const profileData = isOwnProfile ? {
+    id: user!.id,
+    handle: user!.handle || '',
     username: user!.username,
     bio: user!.bio || '',
     avatar: user!.avatar || '',
@@ -345,8 +396,11 @@ export default function Profile() {
     color: user!.color,
     email: user!.email,
     initials: user!.initials,
-    createdAt: user!.createdAt
+    createdAt: user!.createdAt,
+    favoriteGenres: Array.isArray(user!.favoriteGenres) ? user!.favoriteGenres : []
   } : {
+    id: viewedProfile!.id,
+    handle: viewedProfile!.handle || '',
     username: viewedProfile!.username,
     bio: viewedProfile!.bio,
     avatar: viewedProfile!.avatar,
@@ -354,7 +408,8 @@ export default function Profile() {
     color: viewedProfile!.color,
     email: '',
     initials: viewedProfile!.username.slice(0, 2).toUpperCase(),
-    createdAt: viewedProfile!.createdAt
+    createdAt: viewedProfile!.createdAt,
+    favoriteGenres: viewedProfile!.favoriteGenres
   }
 
   const sortedMovies = [...watchedMovies].sort((a, b) => {
@@ -376,18 +431,18 @@ export default function Profile() {
       {/* Header Islands */}
       <AppHeader
           onLogoClick={() => navigate('/')}
-          onRoomsClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : navigate('/rooms')}
+          onRoomsClick={() => navigate('/rooms')}
           roomsOnline={Boolean(currentRoomId)}
-          onLibraryClick={() => navigate('/rooms')}
+          roomsLocked={!user || user.isGuest}
+          onLibraryClick={() => navigate('/library')}
           libraryActive={false}
-          onPlayerClick={() => currentRoomId && navigate(`/room/${currentRoomId}`)}
+          onPlayerClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : navigate('/library')}
           playerDisabled={!currentRoomId}
           playerTitle={currentRoomId ? 'Вернуться в комнату' : 'Нет активной комнаты'}
-          showFavoriteButton={Boolean(user && !user.isGuest)}
-          onFavoriteClick={() => setActiveTab('rated')}
-          favoriteActive={activeTab === 'rated'}
-          onLinkClick={() => currentRoomId ? navigate(`/room/${currentRoomId}`) : navigate('/rooms')}
-          linkDisabled={!currentRoomId}
+          showFavoriteButton
+          favoriteLocked={!user || user.isGuest}
+          onFavoriteClick={() => navigate('/library?favorites=1')}
+          favoriteActive={false}
           search={{
             mode: 'interactive',
             value: headerSearch,
@@ -437,17 +492,41 @@ export default function Profile() {
               </div>
             )}
           </div>
-          {isOwnProfile && (
-            <button className="profile-edit-btn" onClick={handleEditOpen}>
-              Редактировать профиль
-            </button>
-          )}
+          <div className="profile-header__actions">
+            {isOwnProfile && (
+              <button className="profile-edit-btn" onClick={handleEditOpen}>
+                Редактировать профиль
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="profile-info">
-          <h1 className="profile-info__name">{profileData.username}</h1>
-          {profileData.email && <span className="profile-info__handle">@{profileData.email.split('@')[0]}</span>}
+          <div className="profile-info__nameRow">
+            <div className="profile-info__nameStack">
+              <h1 className="profile-info__name">{profileData.username}</h1>
+              {profileData.handle && <span className="profile-info__handle">@{profileData.handle}</span>}
+            </div>
+            {!isOwnProfile && profileData.id && (
+              <ProfileFriendsSection userId={profileData.id} isOwnProfile={false} variant="header" />
+            )}
+          </div>
           {profileData.bio && <p className="profile-info__bio">{profileData.bio}</p>}
+
+          {profileData.favoriteGenres.length > 0 && (
+            <div className="profile-info__genres">
+              {profileData.favoriteGenres.slice(0, 3).map(id => {
+                const g = getGenreOption(id)
+                if (!g) return null
+                return (
+                  <span key={id} className="profile-genrePill" title={g.name}>
+                    <span className="profile-genrePill__name">{g.name}</span>
+                  </span>
+                )
+              })}
+            </div>
+          )}
+
           <div className="profile-info__meta">
             <span className="profile-info__meta-item">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -470,6 +549,15 @@ export default function Profile() {
               </span>
               <span className="profile-info__stat-label">Средняя оценка</span>
             </div>
+            <button
+              className="profile-info__stat profile-info__stat--clickable"
+              onClick={() => setShowFriendsListModal(true)}
+              type="button"
+              aria-label="Открыть список друзей"
+            >
+              <span className="profile-info__stat-number">{profileFriendsCount}</span>
+              <span className="profile-info__stat-label">Друзья</span>
+            </button>
           </div>
         </div>
       </div>
@@ -506,12 +594,27 @@ export default function Profile() {
 
         {visibleMovies.length === 0 ? (
           <div className="profile-empty">
-            <div className="profile-empty__icon">{activeTab === 'watched' ? '🎬' : '❤️'}</div>
+            <div className="profile-empty__icon">
+              {activeTab === 'watched' ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M10 8.5l6 3.5-6 3.5z" fill="currentColor" stroke="none" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                </svg>
+              )}
+            </div>
             <h3 className="profile-empty__title">{activeTab === 'watched' ? 'Пока нет фильмов' : 'Пока нет избранного'}</h3>
             <p className="profile-empty__text">
               {activeTab === 'watched'
-                ? 'Добавьте фильмы, которые вы посмотрели, и оцените их'
-                : 'Здесь будут отображаться фильмы, которые пользователь добавил в избранное'}
+                ? (isOwnProfile
+                    ? 'Добавьте фильмы, которые вы посмотрели, и оцените их'
+                    : 'Пользователь ещё не добавил просмотренные фильмы')
+                : (isOwnProfile
+                    ? 'Здесь будут отображаться фильмы, которые вы добавили в избранное'
+                    : 'Здесь будут отображаться фильмы, которые пользователь добавил в избранное')}
             </p>
           </div>
         ) : (
@@ -579,6 +682,17 @@ export default function Profile() {
           </div>
         )}
       </div>
+
+      {/* Модальное окно — все друзья пользователя */}
+      {(viewedProfile?.id || (isOwnProfile && user?.id)) && (
+        <FriendsListModal
+          isOpen={showFriendsListModal}
+          onClose={() => setShowFriendsListModal(false)}
+          userId={viewedProfile?.id || user!.id}
+          title={isOwnProfile ? 'Мои друзья' : `Друзья ${profileData.username}`}
+          onOpenProfile={(id, handle) => { navigate(handle ? `/${handle}` : `/profile/${id}`); setShowFriendsListModal(false) }}
+        />
+      )}
 
       {/* Edit Profile Modal */}
       {isEditing && (
@@ -668,6 +782,30 @@ export default function Profile() {
                   rows={3}
                 />
                 <span className="profile-modal__char-count">{editBio.length}/100</span>
+              </div>
+
+              <div className="profile-modal__field">
+                <label className="profile-modal__label">
+                  Любимые жанры <span className="profile-modal__hint">(до 3)</span>
+                </label>
+                <div className="profile-modal__genres">
+                  {GENRE_OPTIONS.map(g => {
+                    const active = editFavoriteGenres.includes(g.id)
+                    const disabled = !active && editFavoriteGenres.length >= 3
+                    return (
+                      <button
+                        key={g.id}
+                        type="button"
+                        className={`profile-modal__genre${active ? ' profile-modal__genre--active' : ''}`}
+                        onClick={() => toggleEditGenre(g.id)}
+                        disabled={disabled}
+                      >
+                        <span>{g.name}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <span className="profile-modal__char-count">{editFavoriteGenres.length}/3</span>
               </div>
             </div>
           </div>
@@ -797,6 +935,8 @@ export default function Profile() {
           </div>
         </div>
       )}
+
+      {/* URL paste modal — теперь живёт в AppHeader */}
     </div>
   )
 }

@@ -2,16 +2,19 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { VideoPlayer } from '../components/VideoPlayer'
 import { TMDBLibrary, type SelectedMovieData } from '../components/TMDBLibrary'
-import { YouTubePlayer, isYouTubeUrl, extractYouTubeId, type YouTubePlayerHandle } from '../components/YouTubePlayer'
+import { YouTubePlayer, extractYouTubeId, type YouTubePlayerHandle } from '../components/YouTubePlayer'
 import { EmbedPlayer } from '../components/EmbedPlayer'
 import { RuTubePlayer, isRuTubeUrl, extractRuTubeId, type RuTubePlayerHandle } from '../components/RuTubePlayer'
 import { VKVideoPlayer, isVKVideoUrl, buildVKVideoEmbedFromUrl } from '../components/VKVideoPlayer'
+import InviteFriendsModal from '../components/InviteFriendsModal'
+import ProfileFriendsSection from '../components/ProfileFriendsSection'
 import { EmojiPicker } from '../components/EmojiPicker'
 import '../components/EmojiPicker.css'
 import { GifPicker } from '../components/GifPicker'
 import '../components/GifPicker.css'
 import { PollCreate } from '../components/PollCreate'
 import AppHeader from '../components/AppHeader'
+import LegalModal, { type LegalTab } from '../components/LegalModal'
 import '../components/PollCreate.css'
 import '../components/YouTubePlayer.css'
 import '../components/EmbedPlayer.css'
@@ -21,7 +24,7 @@ import { API_URL } from '../config/api'
 import { useAuth } from '../contexts/AuthContext'
 import { useSocket, type ChatMessage, type MovieCardData } from '../contexts/SocketContext'
 import { searchMovies, getMovieDetails, getMovieExternalIds, getPosterUrl, type TMDBMovie } from '../services/tmdb'
-import { buildEmbedUrl } from '../services/alloha'
+import { resolvePlaybackSource } from '../services/playbackSources'
 import './Room.css'
 
 interface SelectedMovie extends SelectedMovieData {
@@ -34,6 +37,7 @@ type PlayerType = 'html5' | 'youtube' | 'embed' | 'rutube' | 'vkvideo'
 
 interface MiniProfile {
   id: string
+  handle: string
   username: string
   color: string
   avatar: string
@@ -99,6 +103,7 @@ export default function Room() {
   const [urlRoomPrivate, setUrlRoomPrivate] = useState(false)
   const [message, setMessage] = useState('')
   const [showInviteModal, setShowInviteModal] = useState(false)
+  const [showInviteFriendsModal, setShowInviteFriendsModal] = useState(false)
   const [showSoloWarning, setShowSoloWarning] = useState(false)
   const [soloWarningClosing, setSoloWarningClosing] = useState(false)
   const [showSoloBlockedModal, setShowSoloBlockedModal] = useState(false)
@@ -115,6 +120,7 @@ export default function Room() {
   const [authAgreeTerms, setAuthAgreeTerms] = useState(false)
   const [authError, setAuthError] = useState('')
   const [authSubmitting, setAuthSubmitting] = useState(false)
+  const [legalTab, setLegalTab] = useState<LegalTab | null>(null)
   const [showChatTimeoutModal, setShowChatTimeoutModal] = useState(false)
   const [showBanModal, setShowBanModal] = useState(false)
   const [hideChatTimeoutModal, setHideChatTimeoutModal] = useState(false)
@@ -212,14 +218,34 @@ export default function Room() {
     return () => clearTimeout(searchTimeout.current)
   }, [customUrl])
 
-  const startCustomUrlPlayback = useCallback((url: string) => {
+  const startCustomUrlPlayback = useCallback(async (url: string) => {
+    // Пытаемся подгрузить превью с RuTube / VK для красивого баннера в приглашениях
+    let thumbnailUrl: string | null = null
+    let inferredTitle: string | null = null
+    try {
+      const lower = url.toLowerCase()
+      if (/rutube\.ru|vkvideo\.ru|vk\.com|vk\.ru/.test(lower)) {
+        const r = await fetch(`${API_URL}/url-thumbnail?url=${encodeURIComponent(url)}`)
+        if (r.ok) {
+          const data = await r.json() as { ok: boolean; thumbnailUrl: string | null; title: string | null }
+          if (data.ok) {
+            thumbnailUrl = data.thumbnailUrl || null
+            inferredTitle = data.title || null
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Не удалось получить превью URL', err)
+    }
+
+    const title = inferredTitle || 'Видео по ссылке'
     const customMovie: SelectedMovie = {
       id: Date.now(),
-      title: 'Видео по ссылке',
+      title,
       original_title: 'Video from URL',
       overview: '',
-      poster_path: null,
-      backdrop_path: null,
+      poster_path: thumbnailUrl,
+      backdrop_path: thumbnailUrl,
       release_date: '',
       vote_average: 0,
       vote_count: 0,
@@ -247,7 +273,7 @@ export default function Room() {
       setPlayerType('html5')
     }
 
-    selectVideo(url, null, 'Видео по ссылке')
+    selectVideo(url, null, title, null, thumbnailUrl, undefined, isRuTubeUrl(url) ? 'rutube' : isVKVideoUrl(url) ? 'vkvideo' : null)
   }, [selectVideo])
 
   const startTmdbMoviePlayback = useCallback(async (movieId: number, previewMovie?: TMDBMovie) => {
@@ -255,22 +281,27 @@ export default function Room() {
       const details = await getMovieDetails(movieId)
       const externalIds = await getMovieExternalIds(movieId)
 
-      if (!externalIds.imdb_id) {
+      const mappedSource = await resolvePlaybackSource(movieId, externalIds.imdb_id)
+
+      // Поддерживается только RuTube — иначе фильм считается недоступным
+      if (!mappedSource || mappedSource.sourceType !== 'rutube' || !mappedSource.sourceUrl) {
         return false
       }
 
-      const embedUrl = buildEmbedUrl(externalIds.imdb_id)
+      const videoUrl = mappedSource.sourceUrl
+
       const selectedMovie: SelectedMovie = {
         ...details,
-        videoUrl: embedUrl,
+        videoUrl,
         kinopoiskId: null,
         imdbId: externalIds.imdb_id,
-        useEmbed: true
+        useEmbed: false,
+        sourceType: 'rutube'
       }
 
       setCurrentMovie(selectedMovie)
       setCurrentView('player')
-      setPlayerType('embed')
+      setPlayerType('rutube')
 
       sendMessage(`MOVIE_SELECTED:${JSON.stringify({
         movieId,
@@ -281,12 +312,13 @@ export default function Room() {
       })}`)
 
       selectVideo(
-        embedUrl,
+        videoUrl,
         movieId.toString(),
         previewMovie?.title || details.title,
         externalIds.imdb_id,
         previewMovie?.poster_path || details.poster_path,
-        previewMovie?.release_date?.split('-')[0] || details.release_date?.split('-')[0]
+        previewMovie?.release_date?.split('-')[0] || details.release_date?.split('-')[0],
+        'rutube'
       )
 
       return true
@@ -478,7 +510,8 @@ export default function Room() {
       title: roomState.video.title,
       videoUrl: roomState.video.url,
       imdbId: roomState.video.imdbId || null,
-      useEmbed: !!roomState.video.imdbId,
+      useEmbed: roomState.video.sourceType === 'embed',
+      sourceType: roomState.video.sourceType || undefined,
       poster_path: roomState.video.posterPath || null,
       overview: '',
       release_date: roomState.video.year ? `${roomState.video.year}-01-01` : '',
@@ -501,14 +534,10 @@ export default function Room() {
     
     setCurrentMovie(syncedMovie)
     
-    // Определяем тип плеера
-    if (roomState.video.imdbId) {
-      setPlayerType('embed')
-    } else if (isYouTubeUrl(roomState.video.url)) {
-      setPlayerType('youtube')
-    } else if (isRuTubeUrl(roomState.video.url)) {
+    // Определяем тип плеера (поддерживается только RuTube + VK + html5 для прямых ссылок)
+    if (roomState.video.sourceType === 'rutube' || isRuTubeUrl(roomState.video.url)) {
       setPlayerType('rutube')
-    } else if (isVKVideoUrl(roomState.video.url)) {
+    } else if (isVKVideoUrl(roomState.video.url) || roomState.video.sourceType === 'vkvideo') {
       setPlayerType('vkvideo')
     } else {
       setPlayerType('html5')
@@ -684,7 +713,7 @@ export default function Room() {
   // Выбор фильма из TMDB
   const handleSelectMovie = (movie: SelectedMovieData) => {
     const videoUrl = movie.videoUrl || ''
-    
+
     if (!videoUrl) {
       return
     }
@@ -693,23 +722,20 @@ export default function Room() {
       ...movie,
       videoUrl
     }
-    
+
     setCurrentMovie(selectedMovie)
     setCurrentView('player')
-    
-    // Определяем тип плеера
-    if (movie.useEmbed && movie.imdbId) {
-      setPlayerType('embed')
-    } else if (isYouTubeUrl(videoUrl)) {
-      setPlayerType('youtube')
-    } else if (isRuTubeUrl(videoUrl)) {
+
+    // Поддерживается только RuTube для фильмов из каталога.
+    // VK Video и прямые ссылки (html5) допустимы только через ручной URL-плеер.
+    if (isRuTubeUrl(videoUrl) || movie.sourceType === 'rutube') {
       setPlayerType('rutube')
-    } else if (isVKVideoUrl(videoUrl)) {
+    } else if (isVKVideoUrl(videoUrl) || movie.sourceType === 'vkvideo') {
       setPlayerType('vkvideo')
     } else {
       setPlayerType('html5')
     }
-    
+
     // Отправляем сообщение о выборе фильма
     sendMessage(`MOVIE_SELECTED:${JSON.stringify({
       movieId: movie.id,
@@ -718,8 +744,16 @@ export default function Room() {
       year: movie.release_date?.split('-')[0],
       imdbId: movie.imdbId
     })}`)
-    
-    selectVideo(videoUrl, movie.id.toString(), movie.title, movie.imdbId, movie.poster_path, movie.release_date?.split('-')[0])
+
+    selectVideo(
+      videoUrl,
+      movie.id.toString(),
+      movie.title,
+      movie.imdbId,
+      movie.poster_path,
+      movie.release_date?.split('-')[0],
+      movie.sourceType || 'rutube'
+    )
   }
 
   // Модальное окно для ввода URL
@@ -922,7 +956,7 @@ export default function Room() {
       if (authMode === 'login') {
         await login(authUsername, authPassword)
       } else {
-        await register(authUsername, authPassword)
+        await register(authUsername, authUsername, authPassword)
       }
       setShowAuthModal(false)
       
@@ -967,6 +1001,7 @@ export default function Room() {
         const p = data.profile
         setMiniProfile({
           id: p.id,
+          handle: p.handle || '',
           username: p.username,
           color: p.color,
           avatar: p.avatar || '',
@@ -988,14 +1023,24 @@ export default function Room() {
     setMiniProfileLoading(false)
   }
 
+  // Закрываем мини-профиль, если открылся мессенджер
+  useEffect(() => {
+    const handler = () => {
+      setMiniProfile(null)
+      setMiniProfileLoading(false)
+    }
+    window.addEventListener('open-messenger', handler)
+    return () => window.removeEventListener('open-messenger', handler)
+  }, [])
+
   return (
     <div className="room">
       {/* Header */}
       <AppHeader
           onLogoClick={() => navigate('/')}
-          showRoomsButton={Boolean(roomState)}
+          showRoomsButton={true}
           onRoomsClick={() => navigate('/rooms')}
-          roomsOnline={isConnected}
+          roomsOnline={isConnected && Boolean(roomState)}
           roomsLocked={Boolean(user?.isGuest)}
           onLibraryClick={() => { setCurrentView('library'); setCurrentFavView(false) }}
           libraryActive={currentView === 'library' && !currentFavView}
@@ -1055,8 +1100,7 @@ export default function Room() {
             }} />
           ) : currentMovie ? (
             <div className="room__videoWrapper">
-              {/* Если есть imdbId - используем EmbedPlayer */}
-              {currentMovie.imdbId ? (
+              {playerType === 'embed' && currentMovie.imdbId ? (
                 <EmbedPlayer
                   key={currentMovie.imdbId}
                   imdbId={currentMovie.imdbId}
@@ -1132,7 +1176,18 @@ export default function Room() {
           )}
           {/* Users */}
           <div className="room__users">
-            <button className="room__addUser" title="Пригласить" onClick={handleCopyLink}>
+            <button className="room__addUser" title="Пригласить друзей" onClick={() => {
+              if (roomState?.solo) {
+                setShowSoloWarning(true)
+                setSoloWarningClosing(false)
+                return
+              }
+              if (!user || user.isGuest) {
+                handleCopyLink()
+                return
+              }
+              setShowInviteFriendsModal(true)
+            }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
                 <circle cx="9" cy="7" r="4"/>
@@ -1499,7 +1554,10 @@ export default function Room() {
                     </div>
                   )}
                   {showPollCreate && (
-                    <div className={`pollCreate__wrapper ${closingPollCreate ? 'pollCreate__wrapper--exit' : ''}`}>
+                    <div
+                      className={`pollCreate__wrapper ${closingPollCreate ? 'pollCreate__wrapper--exit' : ''}`}
+                      onClick={(e) => { if (e.target === e.currentTarget) closePollCreate() }}
+                    >
                       <PollCreate
                         onSubmit={handleCreatePoll}
                         onClose={closePollCreate}
@@ -1852,6 +1910,13 @@ export default function Room() {
         </div>
       )}
 
+      {/* Invite Friends Modal */}
+      <InviteFriendsModal
+        isOpen={showInviteFriendsModal}
+        onClose={() => setShowInviteFriendsModal(false)}
+        roomId={roomState?.roomId || urlRoomId || ''}
+      />
+
       {/* Solo warning modal */}
       {showSoloWarning && (
         <div className={`room__modal${soloWarningClosing ? ' room__modal--closing' : ''}`} onClick={handleCloseSoloWarning}>
@@ -2007,8 +2072,8 @@ export default function Room() {
                   />
                   <span className="modal__terms-text">
                     Я прочитал(а) и согласен(на) с условиями{' '}
-                    <a href="#" className="modal__terms-link">Политики конфиденциальности</a> и{' '}
-                    <a href="#" className="modal__terms-link">Пользовательского соглашения</a>
+                    <a href="#" className="modal__terms-link" onClick={e => { e.preventDefault(); setLegalTab('privacy') }}>Политики конфиденциальности</a> и{' '}
+                    <a href="#" className="modal__terms-link" onClick={e => { e.preventDefault(); setLegalTab('terms') }}>Пользовательского соглашения</a>
                   </span>
                 </label>
               )}
@@ -2220,15 +2285,40 @@ export default function Room() {
                       <span className="room__miniProfileInfoValue">{miniProfile.watchedCount}</span>
                     </div>
                   </div>
-                  <button className="room__miniProfileBtn" onClick={() => { handleCloseMiniProfile(); navigate(`/profile/${miniProfile.id}`); }}>
-                    Перейти в профиль
-                  </button>
+                  <div className="room__miniProfileActions">
+                    <button
+                      className="room__miniProfileBtn"
+                      onClick={() => {
+                        handleCloseMiniProfile()
+                        if (user && miniProfile.id === user.id) {
+                          navigate('/profile')
+                        } else {
+                          navigate(miniProfile.handle ? `/${miniProfile.handle}` : `/profile/${miniProfile.id}`)
+                        }
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                      </svg>
+                      <span>Перейти в профиль</span>
+                    </button>
+                    {user && !user.isGuest && miniProfile.id !== user.id && (
+                      <ProfileFriendsSection
+                        userId={miniProfile.id}
+                        isOwnProfile={false}
+                        variant="header"
+                      />
+                    )}
+                  </div>
                 </div>
               </>
             )}
           </div>
         </div>
       )}
+
+      <LegalModal isOpen={legalTab !== null} initialTab={legalTab ?? 'privacy'} onClose={() => setLegalTab(null)} />
     </div>
   )
 }

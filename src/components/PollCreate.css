@@ -297,7 +297,6 @@
 .pollCreate__submit:hover {
   background: linear-gradient(135deg, #fbbf24, #f59e0b);
   box-shadow: 0 4px 16px rgba(245, 158, 11, 0.3);
-  transform: translateY(-1px);
 }
 
 .pollCreate__submit:active {
@@ -309,4 +308,77 @@
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.pollCreate__hint {
+  font-size: 12px;
+  color: rgba(245, 158, 11, 0.75);
+  text-align: right;
+  margin-top: -6px;
+}
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 768px) {
+  /* Превращаем поповер опроса в полноэкранный модал, чтобы пользователь видел поле «Вопрос»
+     и кнопку «Публикация» одновременно. До этого форма позиционировалась absolute над композером
+     чата и часть формы (заголовок + вопрос) уходила за пределы видимой области. */
+  .pollCreate__wrapper {
+    position: fixed;
+    inset: 0;
+    bottom: auto;
+    z-index: 9999;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    padding: max(12px, env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom));
+  }
+
+  .pollCreate {
+    max-height: none;
+    height: 100%;
+    width: 100%;
+    max-width: 520px;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  }
+
+  .pollCreate__header {
+    position: sticky;
+    top: 0;
+    background: #0a0a0f;
+    z-index: 2;
+  }
+
+  .pollCreate__body {
+    padding: 14px 16px 16px;
+    gap: 14px;
+  }
+
+  .pollCreate__submit {
+    align-self: stretch;
+    position: sticky;
+    bottom: 0;
+    padding: 14px 18px;
+    font-size: 15px;
+  }
+}
+
+@media (max-width: 480px) {
+  .pollCreate__wrapper {
+    padding: 0;
+  }
+
+  .pollCreate {
+    border-radius: 0;
+    max-width: 100%;
+  }
+
+  .pollCreate__title { font-size: 14px; }
+  .pollCreate__body { padding: 12px; gap: 12px; }
+  .pollCreate__input { font-size: 14px; padding: 10px 12px; }
+  .pollCreate__optionInput { font-size: 14px; }
+  .pollCreate__submit { padding: 14px 18px; font-size: 15px; }
 }

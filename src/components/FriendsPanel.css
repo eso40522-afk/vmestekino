@@ -1,0 +1,814 @@
+/* ===== Друзья / Личные сообщения — общая палитра ===== */
+
+.fp-backdrop,
+.mp-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 16, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  z-index: 1500;
+}
+
+.fp-backdrop--open,
+.mp-backdrop--open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.fp-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 100vw;
+  background: linear-gradient(160deg, rgba(20, 22, 30, 0.98), rgba(15, 16, 22, 0.98));
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: -24px 0 56px rgba(0, 0, 0, 0.45);
+  transform: translateX(110%);
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 1600;
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+  font-family: inherit;
+  /* Родитель .room__header использует pointer-events: none — возвращаем интерактивность панели */
+  pointer-events: auto;
+}
+
+.fp-panel--open {
+  transform: translateX(0);
+}
+
+.fp-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.fp-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.fp-panel__title svg {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.fp-panel__close {
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  transition: background 0.18s ease, transform 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.fp-panel__close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+  transform: rotate(90deg);
+}
+
+.fp-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.fp-tabs::-webkit-scrollbar { display: none; }
+
+.fp-tab {
+  position: relative;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 10px 12px 14px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.18s ease;
+  white-space: nowrap;
+}
+
+.fp-tab:hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.fp-tab--active {
+  color: #fff;
+}
+
+.fp-tab--active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 2px 2px 0 0;
+  animation: fpTabPop 0.25s ease;
+}
+
+@keyframes fpTabPop {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+.fp-tab__badge {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
+}
+
+.fp-tab__badge--accent {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  animation: fpBadgePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes fpBadgePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.25); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0); }
+}
+
+.fp-error {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-size: 13px;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  animation: fpFadeIn 0.2s ease;
+}
+
+.fp-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px 12px 24px;
+  scroll-behavior: smooth;
+}
+
+.fp-body::-webkit-scrollbar {
+  width: 8px;
+}
+.fp-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+.fp-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fp-searchInput {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin: 4px 4px 8px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.fp-searchInput:focus-within {
+  border-color: rgba(251, 146, 60, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fp-searchInput svg {
+  color: rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+}
+
+.fp-searchInput input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 14px;
+}
+
+.fp-searchInput input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.fp-searchInput__clear {
+  background: rgba(255, 255, 255, 0.06);
+  border: none;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.fp-searchInput__clear:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.fp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  transition: background 0.18s ease, transform 0.18s ease;
+  animation: fpFadeIn 0.3s ease;
+}
+
+.fp-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.fp-row__main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.fp-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fp-row__name {
+  color: #fff;
+  font-size: 14.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fp-row__bio {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.fp-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fp-avatar {
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #fff;
+  text-transform: uppercase;
+  user-select: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.fp-avatar--img {
+  object-fit: cover;
+}
+
+/* Базовая кнопка в списке друзей — фиксируем размеры, чтобы
+   «Добавить» / «Отправлено» / «Принять» выглядели одинаково. */
+.fp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 110px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.fp-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Стеклянный серый (как в чате) — вместо оранжевого */
+.fp-btn--primary {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.fp-btn--primary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.fp-btn--ghost {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.8);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+.fp-btn--ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.fp-iconBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.75);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.12s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.fp-iconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fp-iconBtn--primary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.fp-iconBtn--danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* «Отправлено» / «В друзьях» — выглядит как и кнопка «Добавить»,
+   только неинтерактивно. */
+.fp-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.fp-pill--ok {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.75);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.fp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 16px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  text-align: center;
+}
+
+.fp-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.85);
+  animation: fpSpin 0.7s linear infinite;
+  vertical-align: -3px;
+  margin-right: 4px;
+}
+
+@keyframes fpSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fpFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Анимированный бейдж у иконок в шапке — простой точечный индикатор без числа */
+.room__iconBadge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+  text-indent: -9999px;
+  display: inline-block;
+  box-shadow: 0 0 0 2px rgba(15, 16, 22, 1), 0 0 8px rgba(255, 255, 255, 0.35);
+  animation: fpBadgePulse 1.8s ease-in-out infinite, fpBadgeAppear 0.25s ease;
+}
+
+@keyframes fpBadgeAppear {
+  from { transform: scale(0); }
+  to { transform: scale(1); }
+}
+
+.room__iconBtn--social {
+  position: relative;
+}
+
+.room__iconBtn--social.active {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: #fff !important;
+}
+
+/* Мобильная адаптация */
+@media (max-width: 540px) {
+  .fp-panel {
+    width: 100vw;
+    border-left: none;
+  }
+}
+
+/* ==== Расширения: групповой Заявки, фильтр по жанрам, чипы жанров ==== */
+
+.fp-searchBar {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.fp-searchBar .fp-searchInput {
+  flex: 1;
+}
+
+.fp-searchInput--compact {
+  padding: 8px 10px;
+}
+
+.fp-filterBtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  width: 44px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.12s;
+}
+
+.fp-filterBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.fp-filterBtn--active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.fp-filterBtn__badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #15161c;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  animation: fpBadgeAppear 0.22s ease;
+}
+
+.fp-genreFilter {
+  margin-top: 4px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  transform-origin: top center;
+  will-change: max-height, opacity, transform;
+  animation: fpFilterIn 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fp-genreFilter--closing {
+  animation: fpFilterOut 0.26s cubic-bezier(0.4, 0, 0.2, 1) both;
+  pointer-events: none;
+}
+
+@keyframes fpFilterIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px) scaleY(0.96);
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+    max-height: 600px;
+    margin-top: 4px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    border-width: 1px;
+  }
+}
+
+@keyframes fpFilterOut {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+    max-height: 600px;
+    margin-top: 4px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    border-width: 1px;
+  }
+  40% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px) scaleY(0.96);
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+  }
+}
+
+.fp-genreFilter__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fp-genreFilter__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+.fp-genreFilter__clear {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background 0.18s;
+}
+
+.fp-genreFilter__clear:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.fp-genreFilter__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fp-genrePill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.fp-genrePill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.fp-genrePill--mine {
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.fp-genrePill--active {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
+  font-weight: 700;
+}
+
+.fp-genreFilter__hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Чипы жанров в строке пользователя */
+.fp-row__genres {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.fp-row__genre {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.3;
+}
+
+.fp-row__genreEmoji {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.fp-row__genreName {
+  font-weight: 600;
+}
+
+.fp-row__match {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 600;
+}
+
+/* Секции внутри вкладки «Заявки» */
+.fp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  animation: fpFadeIn 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fp-section__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  margin-bottom: 4px;
+}
+
+.fp-section__title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.fp-section__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.fp-section__count--accent {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 480px) {
+  .fp-panel { width: 100vw; max-width: 100vw; border-left: none; }
+  .fp-panel__header { padding: 12px 14px; }
+  .fp-panel__title { font-size: 15px; }
+  .fp-tab { padding: 10px 12px; font-size: 13px; }
+  .fp-list { padding: 8px 10px; }
+  .fp-row { padding: 10px 8px; }
+  .fp-row__avatar { width: 42px; height: 42px; }
+  .fp-row__name { font-size: 14px; }
+  .fp-row__meta { font-size: 11.5px; }
+  .fp-search__input { font-size: 13px; padding: 9px 12px; }
+  .fp-row__actions { gap: 6px; }
+  .fp-row__btn { width: 34px; height: 34px; }
+}

@@ -3,6 +3,29 @@ import { io, Socket } from 'socket.io-client'
 import { useAuth, type User } from './AuthContext'
 import { SOCKET_URL } from '../config/api'
 
+// ==================== ТИПЫ ДРУЗЕЙ / ЛИЧНЫХ СООБЩЕНИЙ ====================
+
+export interface DirectChatUser {
+  id: string
+  handle?: string
+  username: string
+  color: string
+  initials: string
+  avatar: string
+  bio?: string
+  favoriteGenres?: number[]
+}
+
+export interface DirectMessageData {
+  id: number
+  senderId: string
+  recipientId: string
+  text: string
+  messageType: 'text' | 'gif' | 'image' | 'room_invite'
+  createdAt: number
+  readAt: number | null
+}
+
 // ==================== ТИПЫ ====================
 
 export interface MovieCardData {
@@ -46,6 +69,7 @@ export interface VideoState {
   movieId: string | null
   title?: string
   imdbId?: string | null
+  sourceType?: 'html5' | 'youtube' | 'embed' | 'rutube' | 'vkvideo' | null
   posterPath?: string | null
   year?: string
   selectedBy?: string
@@ -91,9 +115,13 @@ interface SocketContextType {
   syncStartState: SyncStartState
   userTimes: Record<string, number>
   moderationState: ModerationState
+  unreadDmCount: number
+  pendingFriendRequests: number
+  friendsVersion: number
+  refreshDmUnread: () => void
   joinRoom: (roomId: string) => void
   leaveRoom: () => void
-  selectVideo: (url: string, movieId: string | null, title?: string, imdbId?: string | null, posterPath?: string | null, year?: string) => void
+  selectVideo: (url: string, movieId: string | null, title?: string, imdbId?: string | null, posterPath?: string | null, year?: string, sourceType?: VideoState['sourceType']) => void
   sendPlay: (currentTime: number) => void
   sendPause: (currentTime: number) => void
   sendSeek: (currentTime: number) => void
@@ -142,6 +170,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   })
   const [userTimes, setUserTimes] = useState<Record<string, number>>({})
   const [moderationState, setModerationState] = useState<ModerationState>(defaultModerationState)
+  const [unreadDmCount, setUnreadDmCount] = useState(0)
+  const [pendingFriendRequests, setPendingFriendRequests] = useState(0)
+  const [friendsVersion, setFriendsVersion] = useState(0)
   const typingTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const userRef = useRef(user)
   const syncUserRef = useRef(syncUser)
@@ -316,6 +347,17 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       })
     })
 
+    // Сообщение удалено администратором
+    newSocket.on('chat-message-deleted', ({ messageId }: { messageId: string }) => {
+      setRoomState(prev => {
+        if (!prev) return null
+        return {
+          ...prev,
+          messages: prev.messages.filter(message => message.id !== messageId)
+        }
+      })
+    })
+
     // Кто-то печатает
     newSocket.on('user-typing', ({ userId, username, isTyping }) => {
       if (isTyping) {
@@ -375,12 +417,56 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       })
     })
 
+    // ==================== ДРУЗЬЯ / ЛИЧНЫЕ СООБЩЕНИЯ ====================
+    newSocket.on('dm-unread', ({ total }: { total: number }) => {
+      setUnreadDmCount(Math.max(0, Number(total) || 0))
+    })
+
+    newSocket.on('dm-message', () => {
+      // Глобально: помечаем, что входящих стало больше (обновится через refresh либо локально в панели)
+      setUnreadDmCount(prev => prev) // оставляем как есть, точный счёт придёт от dm-unread
+    })
+
+    newSocket.on('friend-request-received', () => {
+      setPendingFriendRequests(prev => prev + 1)
+      setFriendsVersion(v => v + 1)
+    })
+
+    newSocket.on('friend-request-declined', () => {
+      setFriendsVersion(v => v + 1)
+    })
+
+    newSocket.on('friend-accepted', () => {
+      setFriendsVersion(v => v + 1)
+    })
+
+    newSocket.on('friend-removed', () => {
+      setFriendsVersion(v => v + 1)
+    })
+
+    newSocket.on('friends-updated', () => {
+      setFriendsVersion(v => v + 1)
+    })
+
     setSocket(newSocket)
 
     return () => {
       newSocket.close()
     }
   }, [])
+
+  // Регистрация сокета на персональный канал при изменении токена/пользователя
+  useEffect(() => {
+    if (!socket || !isConnected) return
+    const token = localStorage.getItem('uniscreen_token')
+    if (token && user && !user.isGuest) {
+      socket.emit('auth-register', { token })
+    } else {
+      socket.emit('auth-unregister')
+      setUnreadDmCount(0)
+      setPendingFriendRequests(0)
+    }
+  }, [socket, isConnected, user?.id, user?.isGuest])
 
   useEffect(() => {
     if (!user || user.isGuest) {
@@ -397,6 +483,34 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     })
   }, [user])
 
+  // Подгружаем актуальные счётчики (заявок и непрочитанных) для пользователя
+  useEffect(() => {
+    if (!user || user.isGuest) {
+      setPendingFriendRequests(0)
+      setUnreadDmCount(0)
+      return
+    }
+    const token = localStorage.getItem('uniscreen_token')
+    if (!token) return
+    const headers = { Authorization: `Bearer ${token}` }
+    let cancelled = false
+
+    Promise.all([
+      fetch(`${SOCKET_URL}/api/friends/requests`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${SOCKET_URL}/api/messages/conversations`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([requestsData, conversationsData]) => {
+      if (cancelled) return
+      if (requestsData && Array.isArray(requestsData.incoming)) {
+        setPendingFriendRequests(requestsData.incoming.length)
+      }
+      if (conversationsData && typeof conversationsData.totalUnread === 'number') {
+        setUnreadDmCount(conversationsData.totalUnread)
+      }
+    })
+
+    return () => { cancelled = true }
+  }, [user?.id, user?.isGuest, friendsVersion])
+
   // Присоединение к комнате
   const joinRoom = useCallback((roomId: string) => {
     if (!socket) return
@@ -411,9 +525,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // Выбор видео
-  const selectVideo = useCallback((url: string, movieId: string | null, title?: string, imdbId?: string | null, posterPath?: string | null, year?: string) => {
+  const selectVideo = useCallback((url: string, movieId: string | null, title?: string, imdbId?: string | null, posterPath?: string | null, year?: string, sourceType?: VideoState['sourceType']) => {
     if (!socket) return
-    socket.emit('select-video', { url, movieId, title, imdbId, posterPath, year })
+    socket.emit('select-video', { url, movieId, title, imdbId, posterPath, year, sourceType })
   }, [socket])
 
   // Воспроизведение
@@ -530,6 +644,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket.emit('vote-poll', { pollId, optionId })
   }, [socket])
 
+  // Перечитать счётчик непрочитанных личных сообщений (по REST, если открыли панель и т.п.)
+  const refreshDmUnread = useCallback(() => {
+    if (!socket) return
+    socket.emit('auth-register', { token: localStorage.getItem('uniscreen_token') })
+  }, [socket])
+
   return (
     <SocketContext.Provider value={{
       socket,
@@ -540,6 +660,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       syncStartState,
       userTimes,
       moderationState,
+      unreadDmCount,
+      pendingFriendRequests,
+      friendsVersion,
+      refreshDmUnread,
       joinRoom,
       leaveRoom,
       selectVideo,

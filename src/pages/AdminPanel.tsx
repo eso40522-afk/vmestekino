@@ -1,11 +1,50 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useSocket } from '../contexts/SocketContext'
 import { API_URL } from '../config/api'
-import { getPosterUrl } from '../services/tmdb'
+import {
+  getPosterUrl,
+  getTopRatedMovies,
+  searchMovies,
+  getMovieDetails,
+  getMovieExternalIds,
+  formatReleaseDate,
+  type TMDBMovie
+} from '../services/tmdb'
 import './AdminPanel.css'
 
-type AdminTab = 'users' | 'rooms' | 'logs'
+type AdminTab = 'users' | 'rooms' | 'logs' | 'video_sources'
+
+type VideoSourceType = 'html5' | 'youtube' | 'embed' | 'rutube' | 'vkvideo'
+
+type AdminVideoSource = {
+  tmdbId: string
+  imdbId: string | null
+  sourceType: VideoSourceType
+  sourceUrl: string
+  dubLanguage: string
+  dubType: string
+  title: string
+  posterPath?: string | null
+  isActive: number | boolean
+  updatedAt?: string
+}
+
+type AdminMovieFilter = 'all' | 'with' | 'without'
+
+type AdminMovieDraft = {
+  tmdbId: number
+  imdbId: string
+  sourceType: VideoSourceType
+  sourceUrl: string
+  dubLanguage: string
+  dubType: string
+  title: string
+  posterPath: string | null
+  year: string
+  isNew: boolean
+}
 
 type AdminUser = {
   id: string
@@ -85,6 +124,7 @@ type UserMessage = {
   messageType: string
   text: string
   createdAt: number
+  messageId?: string
 }
 
 type HistoryPollPayload = {
@@ -239,32 +279,66 @@ function getAdminMovieSelection(text: string): AdminMovieSelection | null {
   }
 }
 
-function formatAuditAction(log: AdminAuditLog) {
-  switch (log.action) {
-    case 'view_room':
-      return `Открыл комнату ${log.targetName}`
-    case 'view_user_history':
-      return `Открыл историю сообщений пользователя ${log.targetName}`
+function logActionLabel(action: string): string {
+  switch (action) {
+    case 'view_room': return 'Просмотр комнаты'
+    case 'view_user_history': return 'Просмотр истории'
+    case 'set_timeout': return 'Таймаут'
+    case 'remove_timeout': return 'Снят таймаут'
+    case 'ban_user': return 'Бан'
+    case 'unban_user': return 'Разбан'
+    case 'upsert_video_source': return 'Источник сохранён'
+    case 'delete_video_source': return 'Источник удалён'
+    case 'delete_chat_message': return 'Сообщение удалено'
+    default: return action
+  }
+}
+
+function logActionTone(action: string): 'neutral' | 'warning' | 'danger' | 'success' | 'info' {
+  switch (action) {
     case 'set_timeout':
-      return `Выдал таймаут пользователю ${log.targetName}`
-    case 'remove_timeout':
-      return `Снял таймаут с пользователя ${log.targetName}`
+      return 'warning'
     case 'ban_user':
-      return `Забанил пользователя ${log.targetName}`
+    case 'delete_video_source':
+    case 'delete_chat_message':
+      return 'danger'
+    case 'remove_timeout':
     case 'unban_user':
-      return `Разбанил пользователя ${log.targetName}`
+    case 'upsert_video_source':
+      return 'success'
+    case 'view_room':
+    case 'view_user_history':
+      return 'info'
     default:
-      return log.action
+      return 'neutral'
   }
 }
 
 function HistoryMessagePreview({ item }: { item: UserMessage }) {
   const gifUrl = getHistoryGifUrl(item)
+  const movie = getAdminMovieSelection(item.text)
   const movieText = getHistoryMovieText(item)
   const poll = getHistoryPoll(item)
 
   if (gifUrl) {
     return <img src={gifUrl} alt="GIF" className="admin-panel__historyGif" loading="lazy" />
+  }
+
+  if (movie) {
+    return (
+      <div className="admin-panel__roomMovieCard">
+        <img
+          src={movie.posterPath ? getPosterUrl(movie.posterPath, 'w342') : getPosterUrl(null)}
+          alt={movie.title}
+          className="admin-panel__roomMoviePoster"
+        />
+        <div className="admin-panel__roomMovieBody">
+          <div className="admin-panel__historyTag">Фильм</div>
+          <div className="admin-panel__roomMovieTitle">{movie.title}</div>
+          <div className="admin-panel__historyHint">Начал смотреть{movie.year ? ` · ${movie.year}` : ''}{movie.imdbId ? ` · ${movie.imdbId}` : ''}</div>
+        </div>
+      </div>
+    )
   }
 
   if (poll) {
@@ -349,6 +423,8 @@ function StatusBadge({ user }: { user: AdminUser }) {
 export default function AdminPanel() {
   const navigate = useNavigate()
   const { token, user, logout } = useAuth()
+  const { socket } = useSocket()
+  const historyTargetRef = useRef<AdminUser | null>(null)
   const [activeTab, setActiveTab] = useState<AdminTab>('users')
   const [search, setSearch] = useState('')
   const [users, setUsers] = useState<AdminUser[]>([])
@@ -360,6 +436,9 @@ export default function AdminPanel() {
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const [historyTarget, setHistoryTarget] = useState<AdminUser | null>(null)
   const [messageHistory, setMessageHistory] = useState<UserMessage[]>([])
+  const [deletingMessageId, setDeletingMessageId] = useState<number | null>(null)
+  const [deleteMessageConfirm, setDeleteMessageConfirm] = useState<UserMessage | null>(null)
+  const [deleteMessageError, setDeleteMessageError] = useState<string | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [selectedRoom, setSelectedRoom] = useState<AdminRoomDetails | null>(null)
   const [showRoomModal, setShowRoomModal] = useState(false)
@@ -367,6 +446,31 @@ export default function AdminPanel() {
   const [confirmAction, setConfirmAction] = useState<ConfirmModerationAction | null>(null)
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([])
   const [actionPending, setActionPending] = useState<string | null>(null)
+
+  // Вкладка "Фильмы"
+  const [movieSearch, setMovieSearch] = useState('')
+  const [movieFilter, setMovieFilter] = useState<AdminMovieFilter>('all')
+  const [tmdbMovies, setTmdbMovies] = useState<TMDBMovie[]>([])
+  const [tmdbLoading, setTmdbLoading] = useState(false)
+  const [tmdbLoadingMore, setTmdbLoadingMore] = useState(false)
+  const [, setTmdbPage] = useState(1)
+  const [, setTmdbHasMore] = useState(true)
+  const [savedSources, setSavedSources] = useState<AdminVideoSource[]>([])
+  const [, setSourcesLoading] = useState(false)
+  const [movieDraft, setMovieDraft] = useState<AdminMovieDraft | null>(null)
+  const [movieDraftLoading, setMovieDraftLoading] = useState(false)
+  const [movieDraftError, setMovieDraftError] = useState<string | null>(null)
+  const [movieDraftSaving, setMovieDraftSaving] = useState(false)
+  const [confirmDeleteSource, setConfirmDeleteSource] = useState<AdminVideoSource | null>(null)
+
+  // Логи
+  const [logSearch, setLogSearch] = useState('')
+  const [logActionFilter, setLogActionFilter] = useState<string>('all')
+
+  // Сортировка и фильтр пользователей
+  const [userStatusDir, setUserStatusDir] = useState<'asc' | 'desc'>('desc')
+  const [userDateDir, setUserDateDir] = useState<'asc' | 'desc'>('desc')
+  const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'timed_out' | 'banned'>('all')
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }),
@@ -407,6 +511,91 @@ export default function AdminPanel() {
     setAuditLogs(data.logs || [])
   }, [token])
 
+  const loadSavedSources = useCallback(async () => {
+    if (!token) return
+    setSourcesLoading(true)
+    try {
+      const res = await fetch(`${API_URL}/admin/video-sources`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await res.json()
+      const sources: AdminVideoSource[] = Array.isArray(data.sources) ? data.sources : []
+      setSavedSources(sources)
+
+      // Дотягиваем постеры для записей без poster_path
+      const missing = sources.filter(item => !item.posterPath)
+      if (missing.length > 0) {
+        const results = await Promise.allSettled(missing.map(item => getMovieDetails(Number(item.tmdbId))))
+        const updates = new Map<string, string>()
+        results.forEach((result, idx) => {
+          if (result.status === 'fulfilled' && result.value?.poster_path) {
+            updates.set(String(missing[idx].tmdbId), result.value.poster_path)
+          }
+        })
+        if (updates.size > 0) {
+          setSavedSources(prev => prev.map(item => updates.has(String(item.tmdbId))
+            ? { ...item, posterPath: updates.get(String(item.tmdbId)) || item.posterPath }
+            : item))
+        }
+      }
+    } finally {
+      setSourcesLoading(false)
+    }
+  }, [token])
+
+  const loadTmdbMovies = useCallback(async (query: string) => {
+    setTmdbLoading(true)
+    setTmdbPage(1)
+    setTmdbHasMore(false)
+    setTmdbMovies([])
+    try {
+      // Лимит страниц TMDB: для поиска 5 (быстрый отклик), для топа — глубокая авто-подгрузка.
+      const AUTO_PAGE_CAP = query.trim() ? 5 : 30
+      const fetcher = query.trim()
+        ? (page: number) => searchMovies(query.trim(), page)
+        : (page: number) => getTopRatedMovies(page)
+      const first = await fetcher(1)
+      const totalPages = Math.min(first.total_pages ?? 1, AUTO_PAGE_CAP)
+      const seen = new Set<number>()
+      const initial = (first.results || []).filter(item => seen.has(item.id) ? false : (seen.add(item.id), true))
+      setTmdbMovies(initial)
+      setTmdbPage(1)
+      // Завершаем основной спиннер сразу — дальше будет фоновая прогрессивная подгрузка.
+      setTmdbLoading(false)
+      if (totalPages <= 1) return
+      setTmdbLoadingMore(true)
+      try {
+        for (let page = 2; page <= totalPages; page++) {
+          let response: { results?: TMDBMovie[] } = {}
+          try {
+            response = await fetcher(page)
+          } catch {
+            break
+          }
+          const extra = (response.results || []).filter(item => seen.has(item.id) ? false : (seen.add(item.id), true))
+          if (extra.length > 0) {
+            setTmdbMovies(prev => [...prev, ...extra])
+          }
+          setTmdbPage(page)
+        }
+      } finally {
+        setTmdbLoadingMore(false)
+      }
+    } catch {
+      setTmdbMovies([])
+      setTmdbHasMore(false)
+      setTmdbLoading(false)
+    }
+  }, [])
+
+  const savedSourceMap = useMemo(() => {
+    const map = new Map<string, AdminVideoSource>()
+    savedSources.forEach(source => {
+      map.set(String(source.tmdbId), source)
+    })
+    return map
+  }, [savedSources])
+
   const loadAdminData = useCallback(async () => {
     if (!token) return
     setLoading(true)
@@ -442,6 +631,146 @@ export default function AdminPanel() {
 
     return () => window.clearInterval(interval)
   }, [loadAuditLogs, loadRooms, token, user?.role])
+
+  useEffect(() => {
+    if (activeTab !== 'video_sources' || user?.role !== 'admin') return
+    loadSavedSources().catch(() => {})
+  }, [activeTab, loadSavedSources, user?.role])
+
+  // Реал-тайм подписка на новые сообщения чата для админов
+  useEffect(() => {
+    if (!socket || !token || user?.role !== 'admin') return
+    socket.emit('admin:subscribe', { token })
+
+    const handleNewLog = (entry: UserMessage & { userId: string }) => {
+      const target = historyTargetRef.current
+      if (!target || target.id !== entry.userId) return
+      setMessageHistory(prev => {
+        if (prev.some(item => item.id === entry.id)) return prev
+        return [{
+          id: entry.id,
+          roomId: entry.roomId,
+          messageType: entry.messageType,
+          text: entry.text,
+          createdAt: entry.createdAt,
+          messageId: entry.messageId
+        }, ...prev]
+      })
+    }
+
+    socket.on('admin-chat-log', handleNewLog)
+    const handleReconnect = () => {
+      socket.emit('admin:subscribe', { token })
+    }
+    socket.on('connect', handleReconnect)
+
+    return () => {
+      socket.off('admin-chat-log', handleNewLog)
+      socket.off('connect', handleReconnect)
+      socket.emit('admin:unsubscribe')
+    }
+  }, [socket, token, user?.role])
+
+  useEffect(() => {
+    historyTargetRef.current = historyTarget
+  }, [historyTarget])
+
+  useEffect(() => {
+    if (activeTab !== 'video_sources') return
+    const timer = window.setTimeout(() => {
+      loadTmdbMovies(movieSearch).catch(() => {})
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [activeTab, movieSearch, loadTmdbMovies])
+
+  const openMovieEditor = useCallback(async (movie: { id: number; title: string; poster_path?: string | null; release_date?: string }) => {
+    setMovieDraftError(null)
+    setMovieDraftLoading(true)
+    const existing = savedSourceMap.get(String(movie.id)) || null
+    setMovieDraft({
+      tmdbId: movie.id,
+      imdbId: existing?.imdbId || '',
+      sourceType: (existing?.sourceType as VideoSourceType) || 'rutube',
+      sourceUrl: existing?.sourceUrl || '',
+      dubLanguage: existing?.dubLanguage || 'ru',
+      dubType: existing?.dubType || 'озвучка',
+      title: existing?.title || movie.title,
+      posterPath: movie.poster_path || existing?.posterPath || null,
+      year: movie.release_date ? formatReleaseDate(movie.release_date) : '',
+      isNew: !existing
+    })
+
+    try {
+      const externalIds = await getMovieExternalIds(movie.id)
+      setMovieDraft(prev => prev && prev.tmdbId === movie.id ? { ...prev, imdbId: prev.imdbId || externalIds.imdb_id || '' } : prev)
+    } catch {
+      // игнорируем, imdbId можно ввести вручную
+    } finally {
+      setMovieDraftLoading(false)
+    }
+  }, [savedSourceMap])
+
+  const closeMovieEditor = useCallback(() => {
+    setMovieDraft(null)
+    setMovieDraftError(null)
+  }, [])
+
+  const submitMovieDraft = useCallback(async () => {
+    if (!movieDraft || !token) return
+    if (!movieDraft.sourceUrl.trim()) {
+      setMovieDraftError('Укажите ссылку на источник')
+      return
+    }
+
+    setMovieDraftSaving(true)
+    setMovieDraftError(null)
+    try {
+      const res = await fetch(`${API_URL}/admin/video-sources`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          tmdbId: movieDraft.tmdbId,
+          imdbId: movieDraft.imdbId.trim() || null,
+          sourceType: movieDraft.sourceType,
+          sourceUrl: movieDraft.sourceUrl.trim(),
+          dubLanguage: movieDraft.dubLanguage,
+          dubType: movieDraft.dubType,
+          title: movieDraft.title,
+          posterPath: movieDraft.posterPath || '',
+          isActive: true
+        })
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setMovieDraftError(typeof data?.error === 'string' ? data.error : 'Не удалось сохранить')
+        return
+      }
+
+      await loadSavedSources()
+      setMovieDraft(null)
+    } catch {
+      setMovieDraftError('Не удалось сохранить')
+    } finally {
+      setMovieDraftSaving(false)
+    }
+  }, [authHeaders, loadSavedSources, movieDraft, token])
+
+  const handleDeleteSource = useCallback(async (source: AdminVideoSource) => {
+    if (!token) return
+    setActionPending(`source-${source.tmdbId}`)
+    try {
+      await fetch(`${API_URL}/admin/video-sources/${source.tmdbId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      await loadSavedSources()
+      setMovieDraft(null)
+    } finally {
+      setActionPending(null)
+      setConfirmDeleteSource(null)
+    }
+  }, [loadSavedSources, token])
 
   const openTimeoutModal = (targetUser: AdminUser) => {
     setSelectedUser(targetUser)
@@ -567,6 +896,30 @@ export default function AdminPanel() {
     }
   }
 
+  const handleDeleteMessage = async (message: UserMessage) => {
+    if (!token || deletingMessageId === message.id) return
+    setDeletingMessageId(message.id)
+    setDeleteMessageError(null)
+    try {
+      const res = await fetch(`${API_URL}/admin/chat-messages/${message.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Не удалось удалить сообщение')
+      }
+      setMessageHistory(prev => prev.filter(item => item.id !== message.id))
+      setDeleteMessageConfirm(null)
+      loadAuditLogs()
+    } catch (error) {
+      console.error('Ошибка удаления сообщения:', error)
+      setDeleteMessageError(error instanceof Error ? error.message : 'Не удалось удалить сообщение')
+    } finally {
+      setDeletingMessageId(null)
+    }
+  }
+
   const loadRoomDetails = useCallback(async (roomId: string) => {
     if (!token) return
 
@@ -662,24 +1015,71 @@ export default function AdminPanel() {
             className={`admin-panel__tab ${activeTab === 'users' ? 'admin-panel__tab--active' : ''}`}
             onClick={() => setActiveTab('users')}
           >
-            Пользователи <span>{users.length}</span>
+            Пользователи
           </button>
           <button
             className={`admin-panel__tab ${activeTab === 'rooms' ? 'admin-panel__tab--active' : ''}`}
             onClick={() => setActiveTab('rooms')}
           >
-            Комнаты <span>{rooms.length}</span>
+            Комнаты
           </button>
           <button
             className={`admin-panel__tab ${activeTab === 'logs' ? 'admin-panel__tab--active' : ''}`}
             onClick={() => setActiveTab('logs')}
           >
-            Логи <span>{auditLogs.length}</span>
+            Логи
+          </button>
+          <button
+            className={`admin-panel__tab ${activeTab === 'video_sources' ? 'admin-panel__tab--active' : ''}`}
+            onClick={() => setActiveTab('video_sources')}
+          >
+            Фильмы
           </button>
         </div>
 
-        {activeTab === 'users' && (
+        {activeTab === 'users' && (() => {
+          const allVisible = users.filter(u => u.role !== 'admin' && u.username.toLowerCase() !== 'test')
+          const activeCount = allVisible.filter(u => u.status === 'active').length
+          const timedOutCount = allVisible.filter(u => u.status === 'timed_out').length
+          const bannedCount = allVisible.filter(u => u.status === 'banned').length
+          const filteredByStatus = userStatusFilter === 'all'
+            ? allVisible
+            : allVisible.filter(u => u.status === userStatusFilter)
+          const statusRank: Record<string, number> = { active: 0, timed_out: 1, banned: 2 }
+          const sortedUsers = [...filteredByStatus].sort((a, b) => {
+            if (userStatusFilter === 'all') {
+              const ra = statusRank[a.status] ?? 99
+              const rb = statusRank[b.status] ?? 99
+              if (ra !== rb) return userStatusDir === 'asc' ? rb - ra : ra - rb
+            }
+            const ta = new Date(a.createdAt).getTime() || 0
+            const tb = new Date(b.createdAt).getTime() || 0
+            return userDateDir === 'asc' ? ta - tb : tb - ta
+          })
+          const statusSortAvailable = userStatusFilter === 'all'
+          const statCards: { key: 'all' | 'active' | 'timed_out' | 'banned'; label: string; value: number; tone?: string }[] = [
+            { key: 'all', label: 'Зарегистрировано', value: allVisible.length },
+            { key: 'active', label: 'Активных', value: activeCount, tone: 'success' },
+            { key: 'timed_out', label: 'В таймауте', value: timedOutCount, tone: 'warning' },
+            { key: 'banned', label: 'Забанено', value: bannedCount, tone: 'danger' }
+          ]
+          return (
           <>
+            <div className="admin-panel__statsRow">
+              {statCards.map(card => (
+                <button
+                  key={card.key}
+                  type="button"
+                  className={`admin-panel__statCard${card.tone ? ` admin-panel__statCard--${card.tone}` : ''}${userStatusFilter === card.key ? ' admin-panel__statCard--active' : ''}`}
+                  onClick={() => setUserStatusFilter(card.key)}
+                >
+                  <div className="admin-panel__statLabel">{card.label}</div>
+                  <div className="admin-panel__statValue">{card.value}</div>
+                  {card.key === 'all' && <div className="admin-panel__statHint">в реальном времени</div>}
+                </button>
+              ))}
+            </div>
+
             <div className="admin-panel__searchWrap">
               <svg className="admin-panel__searchIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="11" cy="11" r="7" />
@@ -698,18 +1098,41 @@ export default function AdminPanel() {
               <div className="admin-panel__tableHeader admin-panel__grid">
                 <span>Пользователь</span>
                 <span>Email</span>
-                <span>Статус</span>
+                <button
+                  type="button"
+                  className={`admin-panel__sortBtn ${userStatusDir === 'asc' ? 'admin-panel__sortBtn--asc' : ''} ${!statusSortAvailable ? 'admin-panel__sortBtn--inactive' : ''}`}
+                  onClick={() => statusSortAvailable && setUserStatusDir(prev => prev === 'desc' ? 'asc' : 'desc')}
+                  disabled={!statusSortAvailable}
+                  title={!statusSortAvailable ? 'Доступно в режиме «Зарегистрировано»' : userStatusDir === 'asc' ? 'От забаненных к активным' : 'От активных к забаненным'}
+                >
+                  Статус
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M7 10l5-5 5 5" />
+                    <path d="M7 14l5 5 5-5" />
+                  </svg>
+                </button>
                 <span>Таймаут</span>
-                <span>Регистрация</span>
+                <button
+                  type="button"
+                  className={`admin-panel__sortBtn ${userDateDir === 'asc' ? 'admin-panel__sortBtn--asc' : ''}`}
+                  onClick={() => setUserDateDir(prev => prev === 'desc' ? 'asc' : 'desc')}
+                  title={userDateDir === 'asc' ? 'От старых к новым' : 'От новых к старым'}
+                >
+                  Регистрация
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M7 10l5-5 5 5" />
+                    <path d="M7 14l5 5 5-5" />
+                  </svg>
+                </button>
                 <span>Действия</span>
               </div>
 
               {loading ? (
                 <div className="admin-panel__empty">Загрузка...</div>
-              ) : users.length === 0 ? (
+              ) : sortedUsers.length === 0 ? (
                 <div className="admin-panel__empty">Пользователи не найдены</div>
               ) : (
-                users.map(targetUser => {
+                sortedUsers.map(targetUser => {
                   const isSelfAdmin = targetUser.role === 'admin'
                   const hasActiveTimeout = Boolean(targetUser.timeoutUntil && targetUser.timeoutUntil > Date.now())
                   return (
@@ -736,8 +1159,8 @@ export default function AdminPanel() {
                           aria-label="История сообщений"
                           disabled={actionPending === targetUser.id}
                         >
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
                           </svg>
                         </button>
                         <button
@@ -771,7 +1194,8 @@ export default function AdminPanel() {
               )}
             </div>
           </>
-        )}
+          )
+        })()}
 
         {activeTab === 'rooms' && (
           <div className="admin-panel__roomsList">
@@ -797,22 +1221,281 @@ export default function AdminPanel() {
         )}
 
         {activeTab === 'logs' && (
-          <div className="admin-panel__logsList">
-            {loading ? (
-              <div className="admin-panel__empty">Загрузка логов...</div>
-            ) : auditLogs.length === 0 ? (
-              <div className="admin-panel__empty">Логи действий администратора пока пусты</div>
+          <div className="admin-panel__logs">
+            <div className="admin-panel__moviesToolbar">
+              <div className="admin-panel__searchWrap admin-panel__searchWrap--inline">
+                <svg className="admin-panel__searchIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M20 20l-3.5-3.5" />
+                </svg>
+                <input
+                  type="text"
+                  className="admin-panel__search"
+                  placeholder="Поиск по администратору, объекту или описанию..."
+                  value={logSearch}
+                  onChange={event => setLogSearch(event.target.value)}
+                />
+              </div>
+              <div className="admin-panel__movieFilters">
+                {([
+                  { key: 'all', label: 'Все' },
+                  { key: 'set_timeout', label: 'Таймауты' },
+                  { key: 'remove_timeout', label: 'Снятия таймаута' },
+                  { key: 'ban_user', label: 'Баны' },
+                  { key: 'unban_user', label: 'Разбаны' },
+                  { key: 'view_room', label: 'Комнаты' },
+                  { key: 'view_user_history', label: 'История' },
+                  { key: 'delete_chat_message', label: 'Удалённые сообщения' },
+                  { key: 'upsert_video_source', label: 'Источники' },
+                  { key: 'delete_video_source', label: 'Удалённые источники' }
+                ] as { key: string; label: string }[]).map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`admin-panel__movieFilter ${logActionFilter === item.key ? 'admin-panel__movieFilter--active' : ''}`}
+                    onClick={() => setLogActionFilter(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="admin-panel__logsList">
+              {loading && auditLogs.length === 0 ? (
+                <div className="admin-panel__empty">Загрузка логов...</div>
+              ) : (() => {
+                const query = logSearch.trim().toLowerCase()
+                const filtered = auditLogs.filter(log => {
+                  if (logActionFilter !== 'all' && log.action !== logActionFilter) return false
+                  if (!query) return true
+                  return (
+                    log.adminUsername.toLowerCase().includes(query) ||
+                    log.targetName.toLowerCase().includes(query) ||
+                    (log.details || '').toLowerCase().includes(query) ||
+                    log.action.toLowerCase().includes(query)
+                  )
+                })
+
+                if (filtered.length === 0) {
+                  return <div className="admin-panel__empty">По выбранным фильтрам логов нет</div>
+                }
+
+                return filtered.map(log => {
+                  const adminUser = users.find(item => item.username === log.adminUsername)
+                  const targetIsUser = log.targetType === 'user'
+                  const targetUser = targetIsUser ? users.find(item => item.id === log.targetId) : null
+                  const targetIsRoom = log.targetType === 'room'
+                  const targetRoom = targetIsRoom ? rooms.find(item => item.roomId === log.targetId) : null
+                  const targetIsSource = log.targetType === 'video_source'
+                  const targetSource = targetIsSource ? savedSourceMap.get(log.targetId) : null
+                  const tone = logActionTone(log.action)
+
+                  return (
+                    <div key={log.id} className={`admin-panel__logCard admin-panel__logCard--${tone}`}>
+                      <div className="admin-panel__logCardBody">
+                        <div className="admin-panel__logCardHeader">
+                          <div className="admin-panel__logCardActor">
+                            {adminUser?.avatar ? (
+                              <img src={adminUser.avatar} alt={adminUser.username} className="admin-panel__logCardAvatar" />
+                            ) : (
+                              <span className="admin-panel__logCardAvatar admin-panel__logCardAvatar--initials" style={{ background: adminUser?.color || '#3a3d4a' }}>
+                                {(log.adminUsername || '?').slice(0, 2).toUpperCase()}
+                              </span>
+                            )}
+                            <div>
+                              <div className="admin-panel__logCardActorName">{log.adminUsername}</div>
+                              <div className="admin-panel__logCardMeta">{formatDateTime(log.createdAt)}</div>
+                            </div>
+                          </div>
+                          <span className={`admin-panel__logActionBadge admin-panel__logActionBadge--${tone}`}>{logActionLabel(log.action)}</span>
+                        </div>
+
+                        <div className="admin-panel__logCardTarget">
+                          {targetUser && (
+                            <div className="admin-panel__logTargetUser">
+                              {targetUser.avatar ? (
+                                <img src={targetUser.avatar} alt={targetUser.username} className="admin-panel__logCardAvatar" />
+                              ) : (
+                                <span className="admin-panel__logCardAvatar admin-panel__logCardAvatar--initials" style={{ background: targetUser.color || '#3a3d4a' }}>
+                                  {targetUser.username.slice(0, 2).toUpperCase()}
+                                </span>
+                              )}
+                              <div>
+                                <div className="admin-panel__logTargetTitle">{targetUser.username}</div>
+                                <div className="admin-panel__logCardMeta">{targetUser.email}</div>
+                              </div>
+                            </div>
+                          )}
+
+                          {targetIsUser && !targetUser && (
+                            <div className="admin-panel__logTargetUser">
+                              <span className="admin-panel__logCardAvatar admin-panel__logCardAvatar--initials" style={{ background: '#3a3d4a' }}>
+                                {(log.targetName || '?').slice(0, 2).toUpperCase()}
+                              </span>
+                              <div>
+                                <div className="admin-panel__logTargetTitle">{log.targetName}</div>
+                                <div className="admin-panel__logCardMeta">пользователь удалён или не загружен</div>
+                              </div>
+                            </div>
+                          )}
+
+                          {targetIsRoom && (
+                            <div className="admin-panel__logTargetRoom">
+                              {targetRoom?.posterPath ? (
+                                <img src={getPosterUrl(targetRoom.posterPath, 'w185')} alt={targetRoom.videoTitle || log.targetId} className="admin-panel__logTargetPoster" />
+                              ) : (
+                                <div className="admin-panel__logTargetPoster admin-panel__logTargetPoster--placeholder">🎬</div>
+                              )}
+                              <div>
+                                <div className="admin-panel__logTargetTitle">{targetRoom?.videoTitle || log.targetName || 'Без фильма'}</div>
+                                <div className="admin-panel__logCardMeta">Комната {log.targetId}{targetRoom ? ` · ${targetRoom.usersCount} участ.` : ' · уже закрыта'}</div>
+                              </div>
+                            </div>
+                          )}
+
+                          {targetIsSource && (
+                            <div className="admin-panel__logTargetRoom">
+                              {targetSource?.posterPath ? (
+                                <img src={getPosterUrl(targetSource.posterPath, 'w185')} alt={targetSource.title} className="admin-panel__logTargetPoster" />
+                              ) : (
+                                <div className="admin-panel__logTargetPoster admin-panel__logTargetPoster--placeholder">🎞</div>
+                              )}
+                              <div>
+                                <div className="admin-panel__logTargetTitle">{targetSource?.title || log.targetName || `TMDB #${log.targetId}`}</div>
+                                <div className="admin-panel__logCardMeta">tmdb: {log.targetId}{targetSource ? ` · ${targetSource.sourceType.toUpperCase()}` : ''}</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {log.details && (
+                          <div className="admin-panel__logCardDetails">{log.details}</div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'video_sources' && (
+          <div className="admin-panel__movies">
+            <div className="admin-panel__statsRow">
+              <div className="admin-panel__statCard">
+                <div className="admin-panel__statLabel">Загружено фильмов</div>
+                <div className="admin-panel__statValue">{tmdbMovies.length.toLocaleString('ru-RU')}</div>
+                <div className="admin-panel__statHint">лучшие фильмы по версии TMDB</div>
+              </div>
+              <div className="admin-panel__statCard admin-panel__statCard--success">
+                <div className="admin-panel__statLabel">С источником</div>
+                <div className="admin-panel__statValue">{savedSources.length}</div>
+                <div className="admin-panel__statHint">сохранено в базе</div>
+              </div>
+              <div className="admin-panel__statCard admin-panel__statCard--warning">
+                <div className="admin-panel__statLabel">Без источника</div>
+                <div className="admin-panel__statValue">{tmdbMovies.filter(m => !savedSourceMap.has(String(m.id))).length.toLocaleString('ru-RU')}</div>
+                <div className="admin-panel__statHint">из загруженных</div>
+              </div>
+            </div>
+            <div className="admin-panel__moviesToolbar">
+              <div className="admin-panel__searchWrap admin-panel__searchWrap--inline">
+                <svg className="admin-panel__searchIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M20 20l-3.5-3.5" />
+                </svg>
+                <input
+                  type="text"
+                  className="admin-panel__search"
+                  placeholder="Поиск фильма по названию..."
+                  value={movieSearch}
+                  onChange={event => setMovieSearch(event.target.value)}
+                />
+              </div>
+              <div className="admin-panel__movieFilters">
+                {([
+                  { key: 'all', label: 'Все' },
+                  { key: 'with', label: `С источником (${savedSources.length})` },
+                  { key: 'without', label: `Без источника (${tmdbMovies.filter(m => !savedSourceMap.has(String(m.id))).length})` }
+                ] as { key: AdminMovieFilter; label: string }[]).map(item => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`admin-panel__movieFilter ${movieFilter === item.key ? 'admin-panel__movieFilter--active' : ''}`}
+                    onClick={() => setMovieFilter(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {tmdbLoading ? (
+              <div className="admin-panel__empty">Загрузка фильмов...</div>
             ) : (
-              auditLogs.map(log => (
-                <div key={log.id} className="admin-panel__logItem">
-                  <div className="admin-panel__historyMeta">
-                    <span>{log.adminUsername}</span>
-                    <span>{formatDateTime(log.createdAt)}</span>
-                  </div>
-                  <div className="admin-panel__logTitle">{formatAuditAction(log)}</div>
-                  <div className="admin-panel__historyHint">{log.details}</div>
-                </div>
-              ))
+              (() => {
+                const search = movieSearch.trim().toLowerCase()
+                let filtered: { id: number; title: string; poster_path?: string | null; release_date?: string }[]
+                if (movieFilter === 'with') {
+                  filtered = savedSources.map(source => ({
+                    id: Number(source.tmdbId),
+                    title: source.title || `tmdb: ${source.tmdbId}`,
+                    poster_path: source.posterPath || null,
+                    release_date: ''
+                  }))
+                  if (search) {
+                    filtered = filtered.filter(movie => movie.title.toLowerCase().includes(search))
+                  }
+                } else {
+                  filtered = tmdbMovies.filter(movie => {
+                    const has = savedSourceMap.has(String(movie.id))
+                    if (movieFilter === 'without') return !has
+                    return true
+                  })
+                }
+
+                if (filtered.length === 0) {
+                  return <div className="admin-panel__empty">Фильмы не найдены</div>
+                }
+
+                return (
+                  <>
+                    <div className="admin-panel__movieGrid">
+                      {filtered.map(movie => {
+                        const mapped = savedSourceMap.get(String(movie.id))
+                        return (
+                          <button
+                            key={movie.id}
+                            type="button"
+                            className={`admin-panel__movieCard ${mapped ? 'admin-panel__movieCard--mapped' : ''}`}
+                            onClick={() => openMovieEditor(movie)}
+                          >
+                            <div className="admin-panel__movieCardPoster">
+                              <img src={getPosterUrl(movie.poster_path ?? null, 'w342')} alt={movie.title} loading="lazy" />
+                              {mapped ? (
+                                <span className="admin-panel__movieBadge admin-panel__movieBadge--mapped">{mapped.sourceType.toUpperCase()}</span>
+                              ) : (
+                                <span className="admin-panel__movieBadge admin-panel__movieBadge--empty">Нет источника</span>
+                              )}
+                            </div>
+                            <div className="admin-panel__movieCardBody">
+                              <div className="admin-panel__movieCardTitle">{movie.title}</div>
+                              <div className="admin-panel__movieCardMeta">{movie.release_date ? formatReleaseDate(movie.release_date) : '—'} · tmdb: {movie.id}</div>
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {tmdbLoadingMore && movieFilter !== 'with' && (
+                      <div className="admin-panel__loadMoreWrap">
+                        <span className="admin-panel__loadMoreHint">Подгружаем ещё фильмы…</span>
+                      </div>
+                    )}
+                  </>
+                )
+              })()
             )}
           </div>
         )}
@@ -855,11 +1538,20 @@ export default function AdminPanel() {
 
       {showHistoryModal && historyTarget && (
         <div className="admin-panel__modalOverlay admin-panel__modalOverlay--front" onClick={() => setShowHistoryModal(false)}>
-          <div className="admin-panel__historyModal" onClick={event => event.stopPropagation()}>
+          <div className="admin-panel__historyModal admin-panel__historyModal--wide" onClick={event => event.stopPropagation()}>
             <div className="admin-panel__historyHeader">
-              <div>
-                <h2 className="admin-panel__modalTitle">История сообщений — {historyTarget.username}</h2>
-                <p className="admin-panel__modalText">Все сохранённые сообщения пользователя в комнатах.</p>
+              <div className="admin-panel__historyHeaderUser">
+                {historyTarget.avatar ? (
+                  <img src={historyTarget.avatar} alt={historyTarget.username} className="admin-panel__historyHeaderAvatar" />
+                ) : (
+                  <span className="admin-panel__historyHeaderAvatar admin-panel__historyHeaderAvatar--initials" style={{ background: historyTarget.color || '#3a3d4a' }}>
+                    {historyTarget.username.slice(0, 2).toUpperCase()}
+                  </span>
+                )}
+                <div>
+                  <h2 className="admin-panel__modalTitle">История — {historyTarget.username}</h2>
+                  <p className="admin-panel__modalText">Все сообщения пользователя · можно удалять</p>
+                </div>
               </div>
               <button className="admin-panel__modalClose" onClick={() => setShowHistoryModal(false)} aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -867,6 +1559,7 @@ export default function AdminPanel() {
                 </svg>
               </button>
             </div>
+
             <div className="admin-panel__historyBody">
               {historyLoading ? (
                 <div className="admin-panel__empty">Загрузка истории...</div>
@@ -880,6 +1573,19 @@ export default function AdminPanel() {
                       <span>{formatDateTime(item.createdAt)}</span>
                     </div>
                     <HistoryMessagePreview item={item} />
+                    <div className="admin-panel__historyItemActions">
+                      <button
+                        type="button"
+                        className="admin-panel__historyDeleteBtn"
+                        onClick={() => { setDeleteMessageError(null); setDeleteMessageConfirm(item) }}
+                        disabled={deletingMessageId === item.id}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        </svg>
+                        <span>{deletingMessageId === item.id ? 'Удаление...' : 'Удалить сообщение'}</span>
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -943,8 +1649,8 @@ export default function AdminPanel() {
                               aria-label="История сообщений"
                               disabled={roomUser.isGuest || actionPending === roomUser.id}
                             >
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
                               </svg>
                             </button>
                             <button
@@ -1030,6 +1736,197 @@ export default function AdminPanel() {
                 Подтвердить
               </button>
               <button className="admin-panel__secondaryBtn" onClick={closeConfirmModal}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteMessageConfirm && (
+        <div
+          className="admin-panel__modalOverlay admin-panel__modalOverlay--front admin-panel__modalOverlay--confirm"
+          onClick={() => { if (deletingMessageId === null) { setDeleteMessageConfirm(null); setDeleteMessageError(null) } }}
+        >
+          <div className="admin-panel__modal admin-panel__confirmModal" onClick={event => event.stopPropagation()}>
+            <button
+              className="admin-panel__modalClose"
+              onClick={() => { setDeleteMessageConfirm(null); setDeleteMessageError(null) }}
+              aria-label="Закрыть"
+              disabled={deletingMessageId !== null}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+            <h2 className="admin-panel__modalTitle">Удалить сообщение?</h2>
+            <p className="admin-panel__modalText">
+              Вы точно хотите удалить это сообщение? Оно также исчезнет из чата комнаты у всех участников.
+            </p>
+            {deleteMessageError && (
+              <p className="admin-panel__modalText" style={{ color: '#ff7a8a' }}>{deleteMessageError}</p>
+            )}
+            <div className="admin-panel__modalActions">
+              <button
+                className="admin-panel__primaryBtn"
+                onClick={() => { handleDeleteMessage(deleteMessageConfirm).catch(() => {}) }}
+                disabled={deletingMessageId !== null}
+              >
+                {deletingMessageId !== null ? 'Удаление...' : 'Удалить'}
+              </button>
+              <button
+                className="admin-panel__secondaryBtn"
+                onClick={() => { setDeleteMessageConfirm(null); setDeleteMessageError(null) }}
+                disabled={deletingMessageId !== null}
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {movieDraft && (
+        <div className="admin-panel__modalOverlay admin-panel__modalOverlay--front" onClick={closeMovieEditor}>
+          <div className="admin-panel__modal admin-panel__movieModal" onClick={event => event.stopPropagation()}>
+            <button className="admin-panel__modalClose" onClick={closeMovieEditor} aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="admin-panel__movieModalHeader">
+              {movieDraft.posterPath ? (
+                <img src={getPosterUrl(movieDraft.posterPath, 'w185')} alt={movieDraft.title} className="admin-panel__movieModalPoster" />
+              ) : (
+                <div className="admin-panel__movieModalPoster admin-panel__movieCardPoster--placeholder">
+                  <span>{(movieDraft.title || '?').slice(0, 1).toUpperCase()}</span>
+                </div>
+              )}
+              <div className="admin-panel__movieModalHeaderText">
+                <div className="admin-panel__historyTag">{movieDraft.isNew ? 'Новый источник' : 'Редактирование'}</div>
+                <h2 className="admin-panel__modalTitle">{movieDraft.title || `TMDB #${movieDraft.tmdbId}`}</h2>
+                <p className="admin-panel__modalText">{movieDraft.year || '—'} · tmdb: {movieDraft.tmdbId}{movieDraft.imdbId ? ` · ${movieDraft.imdbId}` : ''}</p>
+              </div>
+            </div>
+
+            <div className="admin-panel__movieFormGrid">
+              <label className="admin-panel__field">
+                <span>Тип источника</span>
+                <select
+                  value={movieDraft.sourceType}
+                  onChange={event => setMovieDraft(prev => prev ? { ...prev, sourceType: event.target.value as VideoSourceType } : prev)}
+                >
+                  <option value="rutube">RuTube</option>
+                  <option value="vkvideo">VK Video</option>
+                  <option value="youtube">YouTube</option>
+                  <option value="embed">Embed (VidSrc)</option>
+                  <option value="html5">HTML5 (mp4)</option>
+                </select>
+              </label>
+
+              <label className="admin-panel__field admin-panel__field--wide">
+                <span>Ссылка на источник</span>
+                <input
+                  type="url"
+                  placeholder="https://rutube.ru/video/..."
+                  value={movieDraft.sourceUrl}
+                  onChange={event => setMovieDraft(prev => prev ? { ...prev, sourceUrl: event.target.value } : prev)}
+                />
+              </label>
+
+              <label className="admin-panel__field">
+                <span>IMDb ID</span>
+                <input
+                  type="text"
+                  placeholder="tt0133093"
+                  value={movieDraft.imdbId}
+                  onChange={event => setMovieDraft(prev => prev ? { ...prev, imdbId: event.target.value } : prev)}
+                />
+              </label>
+
+              <label className="admin-panel__field">
+                <span>Язык озвучки</span>
+                <input
+                  type="text"
+                  value={movieDraft.dubLanguage}
+                  onChange={event => setMovieDraft(prev => prev ? { ...prev, dubLanguage: event.target.value } : prev)}
+                />
+              </label>
+
+              <label className="admin-panel__field">
+                <span>Тип озвучки</span>
+                <input
+                  type="text"
+                  value={movieDraft.dubType}
+                  onChange={event => setMovieDraft(prev => prev ? { ...prev, dubType: event.target.value } : prev)}
+                />
+              </label>
+
+              <label className="admin-panel__field admin-panel__field--wide">
+                <span>Название</span>
+                <input
+                  type="text"
+                  value={movieDraft.title}
+                  onChange={event => setMovieDraft(prev => prev ? { ...prev, title: event.target.value } : prev)}
+                />
+              </label>
+            </div>
+
+            {movieDraftError && <div className="admin-panel__movieFormError">{movieDraftError}</div>}
+            {movieDraftLoading && <div className="admin-panel__historyHint">Загрузка данных фильма...</div>}
+
+            <div className="admin-panel__modalActions admin-panel__modalActions--split">
+              {!movieDraft.isNew && (
+                <button
+                  type="button"
+                  className="admin-panel__dangerBtn"
+                  onClick={() => {
+                    const saved = savedSourceMap.get(String(movieDraft.tmdbId))
+                    if (saved) setConfirmDeleteSource(saved)
+                  }}
+                  disabled={movieDraftSaving}
+                >
+                  Удалить источник
+                </button>
+              )}
+              <div className="admin-panel__modalActions">
+                <button className="admin-panel__secondaryBtn" onClick={closeMovieEditor} disabled={movieDraftSaving}>
+                  Отмена
+                </button>
+                <button
+                  className="admin-panel__primaryBtn"
+                  onClick={() => { submitMovieDraft().catch(() => {}) }}
+                  disabled={movieDraftSaving || !movieDraft.sourceUrl.trim()}
+                >
+                  {movieDraftSaving ? 'Сохранение...' : 'Сохранить'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteSource && (
+        <div className="admin-panel__modalOverlay admin-panel__modalOverlay--front admin-panel__modalOverlay--confirm" onClick={() => setConfirmDeleteSource(null)}>
+          <div className="admin-panel__modal admin-panel__confirmModal" onClick={event => event.stopPropagation()}>
+            <button className="admin-panel__modalClose" onClick={() => setConfirmDeleteSource(null)} aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+            <h2 className="admin-panel__modalTitle">Удалить источник</h2>
+            <p className="admin-panel__modalText">
+              Источник для «{confirmDeleteSource.title || `TMDB #${confirmDeleteSource.tmdbId}`}» будет удалён. Фильм снова начнёт использовать резервный VidSrc-эмбед.
+            </p>
+            <div className="admin-panel__modalActions">
+              <button
+                className="admin-panel__dangerBtn"
+                onClick={() => { handleDeleteSource(confirmDeleteSource).catch(() => {}) }}
+                disabled={actionPending === `source-${confirmDeleteSource.tmdbId}`}
+              >
+                Удалить
+              </button>
+              <button className="admin-panel__secondaryBtn" onClick={() => setConfirmDeleteSource(null)}>
                 Отмена
               </button>
             </div>

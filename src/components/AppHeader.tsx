@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { User } from '../contexts/AuthContext'
 import { getPosterUrl, formatReleaseDate, type TMDBMovie } from '../services/tmdb'
 import HeaderQuickActions, { type HeaderQuickActionsProps } from './HeaderQuickActions'
+import { useSocket } from '../contexts/SocketContext'
+import FriendsPanel from './FriendsPanel'
+import MessengerPanel from './MessengerPanel'
+import UrlPasteModal from './UrlPasteModal'
 
 function MobileRoomsIcon() {
   return (
@@ -88,8 +93,38 @@ export default function AppHeader({
 }: AppHeaderProps) {
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [showFriendsPanel, setShowFriendsPanel] = useState(false)
+  const [showMessengerPanel, setShowMessengerPanel] = useState(false)
+  const [showUrlPasteModal, setShowUrlPasteModal] = useState(false)
+  const [messengerInitialUserId, setMessengerInitialUserId] = useState<string | null>(null)
   const headerSearchRef = useRef<HTMLDivElement>(null)
   const avatarMenuRef = useRef<HTMLDivElement>(null)
+
+  const socketContext = useSocket()
+  const isAuthed = Boolean(user && !user.isGuest)
+  const navigate = useNavigate()
+
+  // Открыть личные сообщения с конкретным пользователем (вызывается из FriendsPanel и Profile)
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId?: string }>).detail
+      if (!detail?.userId) return
+      setMessengerInitialUserId(detail.userId)
+      setShowMessengerPanel(true)
+      setShowFriendsPanel(false)
+    }
+    window.addEventListener('open-messenger', handler as EventListener)
+    return () => window.removeEventListener('open-messenger', handler as EventListener)
+  }, [])
+
+  useEffect(() => {
+    const handler = () => {
+      setShowFriendsPanel(true)
+      setShowMessengerPanel(false)
+    }
+    window.addEventListener('open-friends', handler)
+    return () => window.removeEventListener('open-friends', handler)
+  }, [])
 
   useEffect(() => {
     const handleMouseDown = (event: MouseEvent) => {
@@ -164,7 +199,51 @@ export default function AppHeader({
 
   const handleMobileLinkClick = () => {
     closeMobileMenu()
-    quickActions.onLinkClick()
+    handleLinkClick()
+  }
+
+  const handleMobileFriendsClick = () => {
+    closeMobileMenu()
+    setShowMessengerPanel(false)
+    setShowFriendsPanel(true)
+  }
+
+  const handleMobileMessagesClick = () => {
+    closeMobileMenu()
+    setShowFriendsPanel(false)
+    setMessengerInitialUserId(null)
+    setShowMessengerPanel(true)
+  }
+
+  // Единый обработчик кнопки «Вставить ссылку» — везде открывает одно и то же модальное окно.
+  // Страница может переопределить поведение, передав свой onLinkClick (напр. Room — внутрикомнатный поток).
+  function handleLinkClick() {
+    if (quickActions.onLinkClick) {
+      quickActions.onLinkClick()
+      return
+    }
+    setShowUrlPasteModal(true)
+  }
+
+  function handleUrlPasteSubmit({ url, mode, isPrivate }: { url: string; mode: 'solo' | 'room'; isPrivate: boolean }) {
+    const safeUrl = encodeURIComponent(url)
+    const isAuthedUser = Boolean(user && !user.isGuest)
+    if (mode === 'room' && isAuthedUser) {
+      socketContext.createRoom(isPrivate)
+        .then(newRoomId => {
+          if (newRoomId) {
+            navigate(`/room/${newRoomId}?autostartUrl=${safeUrl}`)
+          } else {
+            navigate(`/room?autostartUrl=${safeUrl}&solo=1`)
+          }
+        })
+        .catch(err => {
+          console.error('createRoom failed', err)
+          navigate(`/room?autostartUrl=${safeUrl}&solo=1`)
+        })
+      return
+    }
+    navigate(`/room?autostartUrl=${safeUrl}&solo=1`)
   }
 
   const renderSearch = (inDrawer = false) => {
@@ -294,7 +373,7 @@ export default function AppHeader({
           <div className="room__mobileDrawerSection">
             {quickActions.showRoomsButton !== false && (
               <button
-                className="room__mobileDrawerAction"
+                className={`room__mobileDrawerAction${quickActions.roomsActive ? ' room__mobileDrawerAction--active' : ''}`}
                 onClick={handleMobileRoomsClick}
                 type="button"
                 disabled={!quickActions.onRoomsClick || quickActions.roomsLocked}
@@ -333,6 +412,80 @@ export default function AppHeader({
             </button>
           </div>
 
+          {isAuthed ? (
+            <div className="room__mobileDrawerSection">
+              <button
+                className={`room__mobileDrawerAction${showFriendsPanel ? ' room__mobileDrawerAction--active' : ''}`}
+                onClick={handleMobileFriendsClick}
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                <span className="room__mobileDrawerActionLabel">Друзья</span>
+                {socketContext.pendingFriendRequests > 0 && (
+                  <span className="room__mobileDrawerBadge">{socketContext.pendingFriendRequests}</span>
+                )}
+              </button>
+              <button
+                className={`room__mobileDrawerAction${showMessengerPanel ? ' room__mobileDrawerAction--active' : ''}`}
+                onClick={handleMobileMessagesClick}
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                <span className="room__mobileDrawerActionLabel">Сообщения</span>
+                {socketContext.unreadDmCount > 0 && (
+                  <span className="room__mobileDrawerBadge">{socketContext.unreadDmCount}</span>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div className="room__mobileDrawerSection">
+              <button
+                className="room__mobileDrawerAction"
+                type="button"
+                disabled
+                title="Авторизуйтесь для доступа к друзьям"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                <span className="room__mobileDrawerActionLabel">Друзья</span>
+                <span className="room__mobileDrawerLock" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </span>
+              </button>
+              <button
+                className="room__mobileDrawerAction"
+                type="button"
+                disabled
+                title="Авторизуйтесь для доступа к чатам"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                <span className="room__mobileDrawerActionLabel">Сообщения</span>
+                <span className="room__mobileDrawerLock" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                </span>
+              </button>
+            </div>
+          )}
+
           <div className="room__mobileDrawerSection room__mobileDrawerSection--account">
             {user && !user.isGuest ? (
               <>
@@ -361,7 +514,20 @@ export default function AppHeader({
         </div>
       </aside>
 
-      <HeaderQuickActions {...quickActions} />
+      <HeaderQuickActions
+        {...quickActions}
+        onLinkClick={handleLinkClick}
+        linkActive={showUrlPasteModal || quickActions.linkActive}
+        showSocialButtons
+        onFriendsClick={isAuthed ? () => { setShowFriendsPanel(true); setShowMessengerPanel(false) } : undefined}
+        friendsActive={showFriendsPanel}
+        friendsBadge={socketContext.pendingFriendRequests}
+        friendsLocked={!isAuthed}
+        onMessagesClick={isAuthed ? () => { setShowMessengerPanel(true); setShowFriendsPanel(false); setMessengerInitialUserId(null) } : undefined}
+        messagesActive={showMessengerPanel}
+        messagesBadge={socketContext.unreadDmCount}
+        messagesLocked={!isAuthed}
+      />
 
       <div className="room__headerRight">
         {renderSearch()}
@@ -395,6 +561,40 @@ export default function AppHeader({
           <button className="kp-btn kp-btn--ghost" onClick={onLoginClick} type="button">Войти</button>
         )}
       </div>
+
+      {isAuthed && (
+        <>
+          <FriendsPanel
+            isOpen={showFriendsPanel}
+            onClose={() => setShowFriendsPanel(false)}
+            onOpenChat={(userId) => {
+              setMessengerInitialUserId(userId)
+              setShowMessengerPanel(true)
+              setShowFriendsPanel(false)
+            }}
+            onOpenProfile={(userId, handle) => {
+              setShowFriendsPanel(false)
+              navigate(handle ? `/${handle}` : `/profile/${userId}`)
+            }}
+          />
+          <MessengerPanel
+            isOpen={showMessengerPanel}
+            onClose={() => { setShowMessengerPanel(false); setMessengerInitialUserId(null) }}
+            initialUserId={messengerInitialUserId}
+            onOpenProfile={(userId, handle) => {
+              setShowMessengerPanel(false)
+              navigate(handle ? `/${handle}` : `/profile/${userId}`)
+            }}
+          />
+        </>
+      )}
+
+      <UrlPasteModal
+        isOpen={showUrlPasteModal}
+        onClose={() => setShowUrlPasteModal(false)}
+        guestMode={Boolean(user?.isGuest)}
+        onSubmit={handleUrlPasteSubmit}
+      />
     </header>
   )
 }

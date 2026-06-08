@@ -17,7 +17,8 @@ const clientDistDir = path.resolve(__dirname, '../dist')
 const clientIndexPath = path.join(clientDistDir, 'index.html')
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
 import {
-  createUser, getUserById, getUserByEmail, updateUser,
+  createUser, getUserById, getUserByEmail, getUserByHandle, updateUser,
+  generateUniqueHandle, handleExists, sanitizeHandleSeed,
   createSession, getSession, deleteSession, deleteUserSessions,
   getWatchedMovies, rateMovie, deleteWatchedMovie, getUserStats,
   getFavoriteMovies, getFavoriteMovieIds, addFavoriteMovie, removeFavoriteMovie,
@@ -25,7 +26,15 @@ import {
   getUserFavoriteGifs, addFavoriteGif, removeFavoriteGif,
   setUserRole, banUser, unbanUser, setUserTimeout, clearUserTimeout, getAdminUsers,
   getUserMessageHistory, getUserModerationState, logChatMessage, clearExpiredTimeouts,
-  logAdminAction, getAdminAuditLogs
+  deleteChatLogById,
+  logAdminAction, getAdminAuditLogs,
+  getVideoSource, upsertVideoSource, getAllVideoSources, deleteVideoSource,
+  searchUsersForFriends, getFriendshipStatus, getFriendsForUser,
+  getIncomingFriendRequests, getOutgoingFriendRequests,
+  createFriendRequest, acceptFriendRequest, declineFriendRequest, removeFriendship,
+  insertDirectMessage, getConversationMessages, markConversationRead,
+  getTotalUnreadCount, getConversationSummaries,
+  parseFavoriteGenres
 } from './database.js'
 
 const app = express()
@@ -46,6 +55,8 @@ const io = new Server(server, {
 const TMDB_API_KEY = process.env.TMDB_API_KEY || '2dca580c2a14b55200e784d157207b4d'
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p'
+const KINOPOISK_API_KEY = process.env.KINOPOISK_API_KEY || ''
+const KINOPOISK_BASE_URL = 'https://kinopoiskapiunofficial.tech'
 const EMBED_PROXY_ALLOWED_DOMAINS = ['vidsrc.me', 'vidsrc.net', 'vidsrc.xyz', 'vidsrc.to', 'vidsrc.vip']
 
 const EMBED_BALANCERS = [
@@ -85,6 +96,21 @@ const EMBED_BALANCERS = [
 
 // Комнаты остаются в памяти (временные данные)
 const rooms = new Map()
+// Онлайн-присутствие: userId -> количество активных сокетов (учитываем
+// несколько вкладок одного пользователя). Запись удаляется, когда счётчик 0.
+const onlineUserSockets = new Map()
+
+function addOnlineUser(userId) {
+  if (!userId) return
+  onlineUserSockets.set(userId, (onlineUserSockets.get(userId) || 0) + 1)
+}
+
+function removeOnlineUser(userId) {
+  if (!userId) return
+  const next = (onlineUserSockets.get(userId) || 0) - 1
+  if (next <= 0) onlineUserSockets.delete(userId)
+  else onlineUserSockets.set(userId, next)
+}
 const ADMIN_EMAIL = 'adminkino2026@gmail.com'
 const ADMIN_PASSWORD = 'adminkino2026@gmail.com'
 const SUPPORT_EMAIL = 'tpkino2026@gmail.com'
@@ -163,12 +189,14 @@ function serializeAuthUser(req, user) {
   return {
     id: normalizedUser.id,
     email: normalizedUser.email,
+    handle: normalizedUser.handle || '',
     username: normalizedUser.username,
     color: normalizedUser.color,
     initials: getInitials(normalizedUser.username),
     bio: normalizedUser.bio || '',
     avatar: normalizedUser.avatar || '',
     banner: normalizedUser.banner || '',
+    favoriteGenres: parseFavoriteGenres(normalizedUser.favorite_genres),
     createdAt: normalizedUser.created_at,
     ...moderation
   }
@@ -201,6 +229,39 @@ function buildTmdbUrl(endpoint, params = {}) {
   })
 
   return url
+}
+
+function buildSvgPlaceholder(width, height, label) {
+  const safeLabel = String(label || 'Image unavailable').replace(/[<>]/g, '')
+  return `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#111318"/><text x="50%" y="50%" fill="#d1d5db" font-family="Arial, sans-serif" font-size="20" text-anchor="middle" dominant-baseline="middle">${safeLabel}</text></svg>`
+}
+
+function getTmdbImageFallbackSizes(size) {
+  if (size === 'original') {
+    return ['w1280', 'w780', 'w500', 'w342', 'w185']
+  }
+
+  if (size === 'w1280' || size === 'w780') {
+    return ['w780', 'w500', 'w342', 'w185']
+  }
+
+  if (size === 'w500' || size === 'w342') {
+    return ['w342', 'w185']
+  }
+
+  return ['w185']
+}
+
+function getTmdbPlaceholderMeta(size) {
+  if (size === 'original' || size === 'w1280' || size === 'w780') {
+    return { width: 1280, height: 720, label: 'Backdrop unavailable' }
+  }
+
+  if (size === 'w500' || size === 'w342') {
+    return { width: 342, height: 513, label: 'Poster unavailable' }
+  }
+
+  return { width: 185, height: 278, label: 'Photo unavailable' }
 }
 
 function normalizeImdbId(imdbId) {
@@ -264,7 +325,8 @@ async function ensureAdminAccount() {
       email: ADMIN_EMAIL,
       username: 'adminkino2026',
       password: hashedPassword,
-      color: '#3b82f6'
+      color: '#3b82f6',
+      handle: generateUniqueHandle('adminkino2026')
     })
 
     setUserRole(adminId, 'admin')
@@ -304,6 +366,154 @@ app.get('/api/tmdb', async (req, res) => {
   }
 })
 
+// ==================== Трейлеры через Kinopoisk Unofficial API ====================
+// Возвращает массив трейлеров с их CDN (kinopoisk.ru / yandex). Не блокируется в РФ.
+// Поиск идёт по IMDb ID (TMDB -> /movie/{id}/external_ids -> imdb_id),
+// затем /api/v2.2/films/{kpId}/videos.
+// Кэш в памяти на 6 часов, чтобы не выжигать дневной лимит ключа.
+const trailerCache = new Map() // tmdbId -> { videos, expires }
+const TRAILER_CACHE_TTL = 6 * 60 * 60 * 1000
+
+async function fetchKinopoiskIdByImdb(imdbId) {
+  if (!KINOPOISK_API_KEY || !imdbId) return null
+  try {
+    const url = `${KINOPOISK_BASE_URL}/api/v2.2/films?imdbId=${encodeURIComponent(imdbId)}`
+    const response = await fetch(url, {
+      headers: { 'X-API-KEY': KINOPOISK_API_KEY, 'Accept': 'application/json' }
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const first = data?.items?.[0]
+    return first?.kinopoiskId || first?.filmId || null
+  } catch (err) {
+    console.error('Kinopoisk lookup failed:', err.message)
+    return null
+  }
+}
+
+async function fetchKinopoiskTrailers(kpId) {
+  if (!KINOPOISK_API_KEY || !kpId) return []
+  try {
+    const url = `${KINOPOISK_BASE_URL}/api/v2.2/films/${kpId}/videos`
+    const response = await fetch(url, {
+      headers: { 'X-API-KEY': KINOPOISK_API_KEY, 'Accept': 'application/json' }
+    })
+    if (!response.ok) return []
+    const data = await response.json()
+    const items = Array.isArray(data?.items) ? data.items : []
+    // Отдаём только Kinopoisk/Yandex CDN (не YouTube), чтобы работало в РФ
+    return items
+      .filter(v => v.url && v.site && /KINOPOISK|YANDEX|YANDEX_DISK/i.test(v.site))
+      .map(v => ({
+        url: v.url,
+        name: v.name || 'Трейлер',
+        site: v.site
+      }))
+  } catch (err) {
+    console.error('Kinopoisk trailers fetch failed:', err.message)
+    return []
+  }
+}
+
+app.get('/api/movie-trailers/:tmdbId', async (req, res) => {
+  try {
+    const tmdbId = Number(req.params.tmdbId)
+    if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+      return res.status(400).json({ error: 'Некорректный TMDB ID' })
+    }
+
+    // Кэш
+    const cached = trailerCache.get(tmdbId)
+    if (cached && cached.expires > Date.now()) {
+      res.set('Cache-Control', 'public, max-age=3600')
+      return res.json({ videos: cached.videos, source: 'cache' })
+    }
+
+    // 1. Получаем название фильма из TMDB (для поиска на RuTube)
+    let movieTitle = null
+    let movieYear = null
+    let imdbId = null
+    try {
+      const [detailsRes, externalRes] = await Promise.all([
+        fetch(buildTmdbUrl(`/movie/${tmdbId}`, { language: 'ru-RU' })),
+        fetch(buildTmdbUrl(`/movie/${tmdbId}/external_ids`))
+      ])
+      if (detailsRes.ok) {
+        const details = await detailsRes.json()
+        movieTitle = details.title || details.original_title || null
+        movieYear = details.release_date ? String(details.release_date).slice(0, 4) : null
+      }
+      if (externalRes.ok) {
+        const ext = await externalRes.json()
+        imdbId = ext.imdb_id || null
+      }
+    } catch (err) {
+      console.error('TMDB lookup failed for trailers:', err.message)
+    }
+
+    const collected = []
+
+    // 2. Поиск на RuTube (бесплатно, без ключа, не блокируется в РФ)
+    if (movieTitle) {
+      const rutubeVideos = await searchRutubeTrailers(movieTitle, movieYear)
+      collected.push(...rutubeVideos)
+    }
+
+    // 3. Fallback: Кинопоиск (если есть ключ и IMDb ID, и RuTube ничего не дал)
+    if (collected.length === 0 && KINOPOISK_API_KEY && imdbId) {
+      const kpId = await fetchKinopoiskIdByImdb(imdbId)
+      if (kpId) {
+        const kpVideos = await fetchKinopoiskTrailers(kpId)
+        collected.push(...kpVideos)
+      }
+    }
+
+    trailerCache.set(tmdbId, { videos: collected, expires: Date.now() + TRAILER_CACHE_TTL })
+
+    res.set('Cache-Control', 'public, max-age=3600')
+    res.json({ videos: collected, source: collected.length > 0 ? collected[0].site : 'empty' })
+  } catch (error) {
+    console.error('❌ Ошибка получения трейлеров:', error)
+    res.status(500).json({ error: 'Ошибка загрузки трейлеров', videos: [] })
+  }
+})
+
+// Поиск трейлеров на RuTube через их открытый search API.
+// Возвращает embed-URL'ы вида https://rutube.ru/play/embed/{id}
+async function searchRutubeTrailers(title, year) {
+  try {
+    const query = year ? `${title} ${year} трейлер` : `${title} трейлер`
+    const url = `https://rutube.ru/api/search/video/?query=${encodeURIComponent(query)}`
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+    })
+    if (!response.ok) return []
+    const data = await response.json()
+    const results = Array.isArray(data?.results) ? data.results : []
+    // Фильтруем: длительность < 8 минут (трейлеры обычно 1–4 мин), название содержит "трейлер" или "trailer"
+    const filtered = results
+      .filter(v => {
+        if (!v || !v.id) return false
+        const dur = Number(v.duration) || 0
+        if (dur > 480) return false // больше 8 минут — скорее всего не трейлер
+        const name = String(v.title || '').toLowerCase()
+        return name.includes('трейлер') || name.includes('trailer') || name.includes('тизер') || name.includes('teaser')
+      })
+      .slice(0, 5)
+      .map(v => ({
+        url: `https://rutube.ru/play/embed/${v.id}`,
+        name: v.title || 'Трейлер',
+        site: 'RUTUBE',
+        thumbnail: v.thumbnail_url || null,
+        duration: Number(v.duration) || 0
+      }))
+    return filtered
+  } catch (err) {
+    console.error('RuTube trailer search failed:', err.message)
+    return []
+  }
+}
+
 app.get('/api/tmdb/image', async (req, res) => {
   try {
     const { path: imagePath, size = 'w342' } = req.query
@@ -312,24 +522,151 @@ app.get('/api/tmdb/image', async (req, res) => {
       return res.status(400).json({ error: 'Некорректный путь изображения' })
     }
 
-    const imageUrl = `${TMDB_IMAGE_BASE}/${size}${imagePath}`
-    const response = await fetch(imageUrl)
+    const requestedSize = typeof size === 'string' ? size : 'w342'
+    const candidateSizes = [requestedSize, ...getTmdbImageFallbackSizes(requestedSize)]
+    const uniqueSizes = [...new Set(candidateSizes)]
 
-    if (!response.ok) {
-      return res.status(response.status).end()
+    for (const candidateSize of uniqueSizes) {
+      const imageUrl = `${TMDB_IMAGE_BASE}/${candidateSize}${imagePath}`
+      const response = await fetch(imageUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Referer': 'https://www.themoviedb.org/'
+        },
+        timeout: 10000
+      })
+
+      if (!response.ok) {
+        continue
+      }
+
+      const contentType = response.headers.get('content-type')
+      if (contentType) {
+        res.set('Content-Type', contentType)
+      }
+      res.set('Cache-Control', 'public, max-age=86400')
+
+      const buffer = Buffer.from(await response.arrayBuffer())
+      return res.send(buffer)
     }
 
-    const contentType = response.headers.get('content-type')
-    if (contentType) {
-      res.set('Content-Type', contentType)
-    }
-    res.set('Cache-Control', 'public, max-age=86400')
-
-    const buffer = Buffer.from(await response.arrayBuffer())
-    res.send(buffer)
+    const placeholder = getTmdbPlaceholderMeta(requestedSize)
+    res.set('Content-Type', 'image/svg+xml; charset=utf-8')
+    res.set('Cache-Control', 'public, max-age=3600')
+    res.status(200).send(buildSvgPlaceholder(placeholder.width, placeholder.height, placeholder.label))
   } catch (error) {
     console.error('❌ Ошибка TMDB image proxy:', error)
     res.status(500).json({ error: 'Ошибка загрузки изображения TMDB' })
+  }
+})
+
+// ==================== URL THUMBNAIL (RuTube / VK Video) ====================
+// Возвращает превью (баннер) для произвольной ссылки на видео.
+// Сейчас поддерживаются: RuTube oEmbed, VK Video oEmbed. Иначе — null.
+
+const URL_THUMBNAIL_CACHE = new Map()
+const URL_THUMBNAIL_TTL_MS = 60 * 60 * 1000 // 1 час
+
+function extractRuTubeIdFromUrl(url) {
+  const m = url.match(/rutube\.ru\/(?:video|play\/embed|shorts)\/([a-z0-9]+)/i)
+  return m ? m[1] : null
+}
+
+function extractVkVideoIdsFromUrl(url) {
+  // vkvideo.ru/video-123_456 или vk.com/video-123_456
+  const m = url.match(/(?:vkvideo\.ru|vk\.com)\/(?:video|clip)(-?\d+)_(\d+)/i)
+  return m ? { ownerId: m[1], videoId: m[2] } : null
+}
+
+async function fetchRutubeThumbnail(url) {
+  const rid = extractRuTubeIdFromUrl(url)
+  if (!rid) return null
+  try {
+    // RuTube открытый oEmbed
+    const oembedUrl = `https://rutube.ru/api/oembed/?url=${encodeURIComponent(`https://rutube.ru/video/${rid}/`)}&format=json`
+    const r = await fetch(oembedUrl, { timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } })
+    if (r.ok) {
+      const data = await r.json()
+      if (data && typeof data.thumbnail_url === 'string') {
+        return { thumbnailUrl: data.thumbnail_url, title: typeof data.title === 'string' ? data.title : null, provider: 'rutube' }
+      }
+    }
+    // Фолбэк: video info endpoint
+    const infoUrl = `https://rutube.ru/api/video/${rid}/?format=json`
+    const r2 = await fetch(infoUrl, { timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } })
+    if (r2.ok) {
+      const data = await r2.json()
+      if (data && typeof data.thumbnail_url === 'string') {
+        return { thumbnailUrl: data.thumbnail_url, title: typeof data.title === 'string' ? data.title : null, provider: 'rutube' }
+      }
+    }
+  } catch (err) {
+    console.warn('rutube thumbnail fetch failed:', err.message)
+  }
+  return null
+}
+
+async function fetchVkThumbnail(url) {
+  const ids = extractVkVideoIdsFromUrl(url)
+  if (!ids) return null
+  try {
+    // VK oEmbed
+    const oembedUrl = `https://vk.com/oembed?url=${encodeURIComponent(url)}`
+    const r = await fetch(oembedUrl, { timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } })
+    if (r.ok) {
+      const data = await r.json()
+      if (data && typeof data.thumbnail_url === 'string') {
+        return { thumbnailUrl: data.thumbnail_url, title: typeof data.title === 'string' ? data.title : null, provider: 'vk' }
+      }
+    }
+  } catch (err) {
+    console.warn('vk thumbnail fetch failed:', err.message)
+  }
+  return null
+}
+
+app.get('/api/url-thumbnail', async (req, res) => {
+  try {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : ''
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'Параметр url обязателен' })
+    }
+    // Базовая валидация
+    let parsed
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return res.status(400).json({ error: 'Некорректный url' })
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return res.status(400).json({ error: 'Поддерживаются только http/https ссылки' })
+    }
+
+    const cacheKey = rawUrl
+    const cached = URL_THUMBNAIL_CACHE.get(cacheKey)
+    if (cached && Date.now() - cached.at < URL_THUMBNAIL_TTL_MS) {
+      return res.json(cached.data)
+    }
+
+    let result = null
+    const host = parsed.hostname.toLowerCase()
+    if (host.includes('rutube')) {
+      result = await fetchRutubeThumbnail(rawUrl)
+    } else if (host.includes('vkvideo') || host.includes('vk.com') || host.includes('vk.ru')) {
+      result = await fetchVkThumbnail(rawUrl)
+    }
+
+    const payload = result
+      ? { ok: true, thumbnailUrl: result.thumbnailUrl, title: result.title, provider: result.provider }
+      : { ok: false, thumbnailUrl: null, title: null, provider: null }
+
+    URL_THUMBNAIL_CACHE.set(cacheKey, { at: Date.now(), data: payload })
+    res.set('Cache-Control', 'public, max-age=600')
+    res.json(payload)
+  } catch (error) {
+    console.error('❌ Ошибка url-thumbnail:', error)
+    res.status(500).json({ error: 'Ошибка получения превью' })
   }
 })
 
@@ -436,6 +773,31 @@ function buildHistoryLogEntry(username, text) {
   }
 }
 
+function formatDeletedMessageDetails(row) {
+  const roomId = row.roomId || '?'
+  const author = row.username || 'пользователя'
+  const rawText = String(row.text || '').trim()
+
+  if (row.messageType === 'gif') {
+    return `Сообщение удалено в комнате ${roomId} — GIF от ${author}`
+  }
+
+  if (row.messageType === 'poll') {
+    try {
+      const payload = JSON.parse(rawText)
+      const question = (payload?.question || '').toString().trim() || 'без вопроса'
+      const options = Array.isArray(payload?.options) ? payload.options.filter(Boolean).join(', ') : ''
+      const optionsPart = options ? ` (варианты: ${options})` : ''
+      return `Сообщение удалено в комнате ${roomId} — опрос «${question}»${optionsPart}`
+    } catch {
+      return `Сообщение удалено в комнате ${roomId} — опрос`
+    }
+  }
+
+  const preview = rawText.length > 200 ? `${rawText.slice(0, 200)}…` : rawText
+  return `Сообщение удалено в комнате ${roomId}: «${preview}»`
+}
+
 function writeAdminAudit(req, { action, targetType, targetId, targetName, details }) {
   const admin = req.session
   if (!admin?.user_id) return
@@ -536,7 +898,7 @@ function removeSocketFromRoom(socket, { immediateDeleteIfEmpty = false } = {}) {
 // Регистрация
 app.post('/api/register', async (req, res) => {
   try {
-    const { email, password } = req.body
+    const { email, password, handle: rawHandle } = req.body
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email и пароль обязательны' })
@@ -551,6 +913,21 @@ app.post('/api/register', async (req, res) => {
       return res.status(400).json({ error: 'Некорректный формат email' })
     }
 
+    // Валидация логина (handle)
+    const trimmedHandle = String(rawHandle || '').trim().toLowerCase()
+    if (!trimmedHandle) {
+      return res.status(400).json({ error: 'Логин обязателен' })
+    }
+    if (!/^[a-z0-9._]{3,24}$/.test(trimmedHandle)) {
+      return res.status(400).json({ error: 'Логин: 3–24 символа, только латиница, цифры, точка и подчёркивание' })
+    }
+    if (/^[._]|[._]$/.test(trimmedHandle)) {
+      return res.status(400).json({ error: 'Логин не может начинаться или заканчиваться на . или _' })
+    }
+    if (handleExists(trimmedHandle)) {
+      return res.status(400).json({ error: 'Этот логин уже занят' })
+    }
+
     // Проверяем, существует ли пользователь
     const existingUser = getUserByEmail(email)
     if (existingUser) {
@@ -559,7 +936,7 @@ app.post('/api/register', async (req, res) => {
 
     const userId = uuidv4()
     const color = generateColor()
-    const username = email.split('@')[0]
+    const username = trimmedHandle
 
     // Хешируем пароль
     const hashedPassword = await bcrypt.hash(password, 10)
@@ -570,7 +947,8 @@ app.post('/api/register', async (req, res) => {
       email,
       username,
       password: hashedPassword,
-      color
+      color,
+      handle: trimmedHandle
     })
 
     // Создаём сессию в БД
@@ -660,6 +1038,7 @@ app.get('/api/profile/:userId', (req, res) => {
   res.json({
     profile: {
       id: normalizedUser.id,
+      handle: normalizedUser.handle || '',
       username: normalizedUser.username,
       email: normalizedUser.email,
       color: normalizedUser.color,
@@ -667,6 +1046,42 @@ app.get('/api/profile/:userId', (req, res) => {
       bio: normalizedUser.bio || '',
       avatar: normalizedUser.avatar || '',
       banner: normalizedUser.banner || '',
+      favoriteGenres: parseFavoriteGenres(normalizedUser.favorite_genres),
+      watchedMovies: watchedMoviesList,
+      favoriteMovies: favoriteMoviesList,
+      stats,
+      createdAt: normalizedUser.created_at,
+      ...getModerationPayload(user)
+    }
+  })
+})
+
+// Получить профиль по handle (логину)
+app.get('/api/profile/by-handle/:handle', (req, res) => {
+  const { handle } = req.params
+  const user = getUserByHandle(handle)
+
+  if (!user) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+
+  const watchedMoviesList = getWatchedMovies(user.id).map(movie => normalizeMovieMedia(req, movie))
+  const favoriteMoviesList = getFavoriteMovies(user.id).map(movie => normalizeMovieMedia(req, movie))
+  const stats = getUserStats(user.id)
+  const normalizedUser = normalizeUserMedia(req, user)
+
+  res.json({
+    profile: {
+      id: normalizedUser.id,
+      handle: normalizedUser.handle || '',
+      username: normalizedUser.username,
+      email: normalizedUser.email,
+      color: normalizedUser.color,
+      initials: getInitials(normalizedUser.username),
+      bio: normalizedUser.bio || '',
+      avatar: normalizedUser.avatar || '',
+      banner: normalizedUser.banner || '',
+      favoriteGenres: parseFavoriteGenres(normalizedUser.favorite_genres),
       watchedMovies: watchedMoviesList,
       favoriteMovies: favoriteMoviesList,
       stats,
@@ -685,9 +1100,9 @@ app.put('/api/profile', (req, res) => {
     return res.status(401).json({ error: 'Не авторизован' })
   }
 
-  const { username, bio, avatar, banner } = req.body
+  const { username, bio, avatar, banner, favoriteGenres } = req.body
 
-  const updatedUser = updateUser(session.user_id, { username, bio, avatar, banner })
+  const updatedUser = updateUser(session.user_id, { username, bio, avatar, banner, favoriteGenres })
 
   if (!updatedUser) {
     return res.status(404).json({ error: 'Пользователь не найден' })
@@ -706,6 +1121,7 @@ app.put('/api/profile', (req, res) => {
       bio: normalizedUser.bio,
       avatar: normalizedUser.avatar,
       banner: normalizedUser.banner,
+      favoriteGenres: parseFavoriteGenres(normalizedUser.favorite_genres),
       watchedMovies: watchedMoviesList,
       createdAt: normalizedUser.created_at,
       ...getModerationPayload(updatedUser)
@@ -791,7 +1207,9 @@ app.get('/api/admin/users/:userId/messages', requireAdmin, (req, res) => {
     return res.status(404).json({ error: 'Пользователь не найден' })
   }
 
-  const messages = getUserMessageHistory(req.params.userId).map(message => ({
+  const messages = getUserMessageHistory(req.params.userId)
+    .filter(message => message.messageType !== 'movie')
+    .map(message => ({
     ...message,
     text: message.messageType === 'gif'
       ? normalizeMediaUrl(req, message.text.startsWith('GIF:') ? message.text.slice(4) : message.text)
@@ -816,6 +1234,43 @@ app.get('/api/admin/users/:userId/messages', requireAdmin, (req, res) => {
     },
     messages
   })
+})
+
+app.delete('/api/admin/chat-messages/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id)
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ error: 'Некорректный идентификатор' })
+  }
+
+  const row = deleteChatLogById(id)
+  if (!row) {
+    return res.status(404).json({ error: 'Сообщение не найдено' })
+  }
+
+  if (row.messageId) {
+    const room = rooms.get(row.roomId)
+    if (room && Array.isArray(room.messages)) {
+      const removed = room.messages.find(message => message.id === row.messageId)
+      const before = room.messages.length
+      room.messages = room.messages.filter(message => message.id !== row.messageId)
+      if (removed?.poll?.id && room.polls) {
+        room.polls.delete(removed.poll.id)
+      }
+      if (room.messages.length !== before) {
+        io.to(row.roomId).emit('chat-message-deleted', { messageId: row.messageId })
+      }
+    }
+  }
+
+  writeAdminAudit(req, {
+    action: 'delete_chat_message',
+    targetType: 'user',
+    targetId: row.userId,
+    targetName: row.username,
+    details: formatDeletedMessageDetails(row)
+  })
+
+  res.json({ ok: true, messageId: row.messageId || null })
 })
 
 app.post('/api/admin/users/:userId/timeout', requireAdmin, (req, res) => {
@@ -949,6 +1404,75 @@ app.get('/api/admin/logs', requireAdmin, (req, res) => {
   res.json({ logs })
 })
 
+// ==================== АДМИН: ИСТОЧНИКИ ВИДЕО ====================
+
+app.get('/api/admin/video-sources', requireAdmin, (_req, res) => {
+  res.json({ sources: getAllVideoSources() })
+})
+
+app.post('/api/admin/video-sources', requireAdmin, (req, res) => {
+  const { tmdbId, imdbId, sourceType, sourceUrl, dubLanguage, dubType, title, posterPath, isActive } = req.body || {}
+
+  if (!tmdbId || !sourceType || !sourceUrl) {
+    return res.status(400).json({ error: 'tmdbId, sourceType и sourceUrl обязательны' })
+  }
+
+  const allowedSourceTypes = new Set(['html5', 'youtube', 'embed', 'rutube', 'vkvideo'])
+  const normalizedSourceType = String(sourceType).trim().toLowerCase()
+  if (!allowedSourceTypes.has(normalizedSourceType)) {
+    return res.status(400).json({ error: 'Неподдерживаемый sourceType' })
+  }
+
+  try {
+    const source = upsertVideoSource({
+      tmdbId,
+      imdbId,
+      sourceType: normalizedSourceType,
+      sourceUrl,
+      dubLanguage,
+      dubType,
+      title,
+      posterPath: typeof posterPath === 'string' ? posterPath : '',
+      isActive: isActive !== false
+    })
+
+    logAdminAction({
+      adminId: req.session.user_id,
+      adminUsername: req.session.username,
+      action: 'upsert_video_source',
+      targetType: 'video_source',
+      targetId: String(tmdbId),
+      targetName: title || `tmdb:${tmdbId}`,
+      details: `${normalizedSourceType} → ${sourceUrl}`,
+      createdAt: Date.now()
+    })
+
+    res.json({ source })
+  } catch (error) {
+    res.status(500).json({ error: 'Не удалось сохранить источник' })
+  }
+})
+
+app.delete('/api/admin/video-sources/:tmdbId', requireAdmin, (req, res) => {
+  const removed = deleteVideoSource(req.params.tmdbId)
+  if (!removed) {
+    return res.status(404).json({ error: 'Источник не найден' })
+  }
+
+  logAdminAction({
+    adminId: req.session.user_id,
+    adminUsername: req.session.username,
+    action: 'delete_video_source',
+    targetType: 'video_source',
+    targetId: String(req.params.tmdbId),
+    targetName: `tmdb:${req.params.tmdbId}`,
+    details: '',
+    createdAt: Date.now()
+  })
+
+  res.json({ ok: true })
+})
+
 // Добавить/обновить оценку фильма
 app.post('/api/profile/rate-movie', (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
@@ -1004,6 +1528,461 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true })
 })
 
+// ==================== ДРУЗЬЯ И ЛИЧНЫЕ СООБЩЕНИЯ ====================
+
+function requireAuth(req, res) {
+  const session = getRequestSession(req)
+  if (!session) {
+    res.status(401).json({ error: 'Не авторизован' })
+    return null
+  }
+  return session
+}
+
+function publicUserCard(req, row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    handle: row.handle || '',
+    username: row.username,
+    color: row.color || '#6366f1',
+    initials: getInitials(row.username || '?'),
+    avatar: normalizeMediaUrl(req, row.avatar || ''),
+    bio: row.bio || '',
+    favoriteGenres: parseFavoriteGenres(row.favorite_genres)
+  }
+}
+
+function emitToUser(userId, event, payload) {
+  if (!userId) return
+  io.to(`user:${userId}`).emit(event, payload)
+}
+
+function emitFriendsUpdate(userId) {
+  if (!userId) return
+  io.to(`user:${userId}`).emit('friends-updated', {
+    timestamp: Date.now()
+  })
+}
+
+function emitUnreadUpdate(userId) {
+  if (!userId) return
+  io.to(`user:${userId}`).emit('dm-unread', {
+    total: getTotalUnreadCount(userId)
+  })
+}
+
+function serializeDirectMessage(message) {
+  if (!message) return null
+  return {
+    id: message.id,
+    senderId: message.senderId,
+    recipientId: message.recipientId,
+    text: message.text,
+    messageType: message.messageType || 'text',
+    createdAt: Number(message.createdAt),
+    readAt: message.readAt ? Number(message.readAt) : null
+  }
+}
+
+// Поиск пользователей для добавления в друзья
+app.get('/api/users/search', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const query = typeof req.query.q === 'string' ? req.query.q : ''
+  const genresRaw = typeof req.query.genres === 'string' ? req.query.genres : ''
+  const genreIds = genresRaw
+    .split(',')
+    .map(value => Number(value.trim()))
+    .filter(value => Number.isInteger(value) && value > 0)
+  const results = searchUsersForFriends(query, session.user_id, 24, genreIds).map(row => {
+    const card = publicUserCard(req, row)
+    const { status } = getFriendshipStatus(session.user_id, row.id)
+    return {
+      ...card,
+      friendshipStatus: status,
+      genreMatches: row._genreMatches || 0
+    }
+  })
+  res.json({ users: results })
+})
+
+// Статус дружбы с конкретным пользователем
+app.get('/api/friends/status/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  if (otherId === session.user_id) {
+    return res.json({ status: 'self' })
+  }
+  const target = getUserById(otherId)
+  if (!target) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+  const { status } = getFriendshipStatus(session.user_id, otherId)
+  res.json({ status })
+})
+
+// Мой список друзей
+app.get('/api/friends', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const friends = getFriendsForUser(session.user_id).map(row => publicUserCard(req, row))
+  res.json({ friends })
+})
+
+// Публичный список друзей конкретного пользователя
+app.get('/api/friends/list/:userId', (req, res) => {
+  const target = getUserById(req.params.userId)
+  if (!target) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+  const friends = getFriendsForUser(target.id).map(row => publicUserCard(req, row))
+  res.json({ friends })
+})
+
+// Входящие заявки
+app.get('/api/friends/requests', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const incoming = getIncomingFriendRequests(session.user_id).map(row => publicUserCard(req, row))
+  const outgoing = getOutgoingFriendRequests(session.user_id).map(row => publicUserCard(req, row))
+  res.json({ incoming, outgoing })
+})
+
+// Отправить заявку в друзья
+app.post('/api/friends/request/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const targetId = req.params.userId
+  if (targetId === session.user_id) {
+    return res.status(400).json({ error: 'Нельзя добавить себя в друзья' })
+  }
+  const target = getUserById(targetId)
+  if (!target) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+
+  try {
+    const result = createFriendRequest(session.user_id, targetId)
+    const status = getFriendshipStatus(session.user_id, targetId)
+
+    // Notify target
+    if (result.accepted) {
+      emitFriendsUpdate(targetId)
+      emitFriendsUpdate(session.user_id)
+      emitToUser(targetId, 'friend-accepted', {
+        user: publicUserCard(req, { id: session.user_id, username: session.username, color: session.color, avatar: session.avatar })
+      })
+    } else {
+      emitToUser(targetId, 'friend-request-received', {
+        user: publicUserCard(req, { id: session.user_id, username: session.username, color: session.color, avatar: session.avatar })
+      })
+    }
+
+    res.json({ status: status.status })
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Не удалось отправить заявку' })
+  }
+})
+
+// Принять заявку
+app.post('/api/friends/accept/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  try {
+    acceptFriendRequest(session.user_id, otherId)
+    emitFriendsUpdate(session.user_id)
+    emitFriendsUpdate(otherId)
+    emitToUser(otherId, 'friend-accepted', {
+      user: publicUserCard(req, { id: session.user_id, username: session.username, color: session.color, avatar: session.avatar })
+    })
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Не удалось принять заявку' })
+  }
+})
+
+// Отклонить заявку
+app.post('/api/friends/decline/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  try {
+    declineFriendRequest(session.user_id, otherId)
+    emitToUser(otherId, 'friend-request-declined', { byUserId: session.user_id })
+    emitFriendsUpdate(session.user_id)
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Не удалось отклонить заявку' })
+  }
+})
+
+// Удалить друга / отменить заявку
+app.delete('/api/friends/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  const result = removeFriendship(session.user_id, otherId)
+  if (result.removed) {
+    emitFriendsUpdate(session.user_id)
+    emitFriendsUpdate(otherId)
+    emitToUser(otherId, 'friend-removed', { byUserId: session.user_id })
+  }
+  res.json({ ok: true })
+})
+
+// Список диалогов
+app.get('/api/messages/conversations', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const summaries = getConversationSummaries(session.user_id).map(row => ({
+    user: publicUserCard(req, row),
+    lastMessage: {
+      id: row.messageId,
+      senderId: row.senderId,
+      recipientId: row.recipientId,
+      text: row.text,
+      messageType: row.messageType || 'text',
+      createdAt: Number(row.createdAt),
+      readAt: row.readAt ? Number(row.readAt) : null
+    },
+    unread: Number(row.unread || 0)
+  }))
+  res.json({
+    conversations: summaries,
+    totalUnread: getTotalUnreadCount(session.user_id)
+  })
+})
+
+// Сообщения в диалоге
+app.get('/api/messages/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  const other = getUserById(otherId)
+  if (!other) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+
+  const beforeId = req.query.before ? Number(req.query.before) : null
+  const limit = req.query.limit ? Number(req.query.limit) : 100
+  const messages = getConversationMessages(session.user_id, otherId, { limit, beforeId })
+    .map(serializeDirectMessage)
+
+  res.json({
+    user: publicUserCard(req, other),
+    messages
+  })
+})
+
+// Отправить сообщение
+app.post('/api/messages/:userId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+
+  const otherId = req.params.userId
+  if (otherId === session.user_id) {
+    return res.status(400).json({ error: 'Нельзя писать самому себе' })
+  }
+
+  const target = getUserById(otherId)
+  if (!target) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+  if (target.is_banned) {
+    return res.status(403).json({ error: 'Пользователь заблокирован' })
+  }
+
+  // Должны быть друзьями
+  const status = getFriendshipStatus(session.user_id, otherId)
+  if (status.status !== 'friends') {
+    return res.status(403).json({ error: 'Можно писать только друзьям' })
+  }
+
+  // Не разрешаем при бане отправителя или активном таймауте
+  const senderModeration = getUserModerationState(session.user_id)
+  if (senderModeration?.isBanned) {
+    return res.status(403).json({ error: 'Ваш аккаунт заблокирован' })
+  }
+  if (senderModeration?.timeoutUntil && Number(senderModeration.timeoutUntil) > Date.now()) {
+    return res.status(403).json({ error: 'Чат временно недоступен' })
+  }
+
+  const rawText = typeof req.body?.text === 'string' ? req.body.text.trim() : ''
+  const messageType = ['text', 'gif', 'image'].includes(req.body?.messageType) ? req.body.messageType : 'text'
+
+  if (!rawText) {
+    return res.status(400).json({ error: 'Пустое сообщение' })
+  }
+  if (rawText.length > 4000) {
+    return res.status(400).json({ error: 'Слишком длинное сообщение' })
+  }
+
+  const stored = insertDirectMessage({
+    senderId: session.user_id,
+    recipientId: otherId,
+    text: rawText,
+    messageType
+  })
+
+  const payload = serializeDirectMessage(stored)
+
+  emitToUser(otherId, 'dm-message', {
+    message: payload,
+    from: publicUserCard(req, { id: session.user_id, username: session.username, color: session.color, avatar: session.avatar })
+  })
+  emitToUser(session.user_id, 'dm-message', {
+    message: payload,
+    from: publicUserCard(req, target)
+  })
+  emitUnreadUpdate(otherId)
+
+  res.json({ message: payload })
+})
+
+// Пометить диалог как прочитанный
+app.post('/api/messages/:userId/read', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  const changes = markConversationRead(session.user_id, otherId)
+  if (changes > 0) {
+    emitToUser(otherId, 'dm-read', { byUserId: session.user_id })
+    emitUnreadUpdate(session.user_id)
+  }
+  res.json({ ok: true, updated: changes })
+})
+
+// Индикатор печати в личных сообщениях
+app.post('/api/messages/:userId/typing', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+  const otherId = req.params.userId
+  // быстрая проверка дружбы
+  const status = getFriendshipStatus(session.user_id, otherId)
+  if (status.status !== 'friends') {
+    return res.status(403).json({ error: 'Не друзья' })
+  }
+  emitToUser(otherId, 'dm-typing', {
+    fromUserId: session.user_id,
+    isTyping: Boolean(req.body?.isTyping)
+  })
+  res.json({ ok: true })
+})
+
+// ==================== ПРИГЛАШЕНИЯ В КОМНАТУ ====================
+// Отправить приглашение в комнату другу через личное сообщение
+app.post('/api/rooms/:roomId/invite/:friendId', (req, res) => {
+  const session = requireAuth(req, res)
+  if (!session) return
+
+  const roomId = String(req.params.roomId || '').toUpperCase()
+  const friendId = String(req.params.friendId || '')
+
+  if (!roomId || !friendId) {
+    return res.status(400).json({ error: 'Не указан roomId или friendId' })
+  }
+  if (friendId === session.user_id) {
+    return res.status(400).json({ error: 'Нельзя пригласить самого себя' })
+  }
+
+  const room = rooms.get(roomId)
+  if (!room) {
+    return res.status(404).json({ error: 'Комната не найдена' })
+  }
+
+  // Caller должен быть в комнате
+  const callerInRoom = Array.from(room.users.values()).some(u => u.id === session.user_id)
+  if (!callerInRoom) {
+    return res.status(403).json({ error: 'Вы не находитесь в этой комнате' })
+  }
+
+  if (room.solo) {
+    return res.status(400).json({ error: 'Нельзя приглашать в одиночный режим' })
+  }
+  if (room.isPrivate && room.creatorId && room.creatorId !== session.user_id) {
+    // Гостям приватной комнаты можно тоже приглашать — оставим разрешено,
+    // но если требуется ограничить — раскомментировать строку ниже:
+    // return res.status(403).json({ error: 'Только создатель может приглашать в приватную комнату' })
+  }
+
+  const target = getUserById(friendId)
+  if (!target) {
+    return res.status(404).json({ error: 'Пользователь не найден' })
+  }
+  if (target.is_banned) {
+    return res.status(403).json({ error: 'Пользователь заблокирован' })
+  }
+
+  // Должны быть друзьями
+  const status = getFriendshipStatus(session.user_id, friendId)
+  if (status.status !== 'friends') {
+    return res.status(403).json({ error: 'Можно приглашать только друзей' })
+  }
+
+  // Сборка payload приглашения
+  const members = Array.from(room.users.values()).map(u => ({
+    id: u.id,
+    username: u.username,
+    color: u.color,
+    initials: u.initials,
+    avatar: normalizeMediaUrl(req, u.avatar || '')
+  }))
+
+  const video = room.video || {}
+  const moviePoster = video.posterPath || ''
+  const normalizedPoster = moviePoster.startsWith('/') && !moviePoster.startsWith('/api/') && !moviePoster.startsWith('/uploads/')
+    ? `${getPublicOrigin(req)}/api/tmdb/image?size=w342&path=${encodeURIComponent(moviePoster)}`
+    : normalizeMediaUrl(req, moviePoster)
+  const movie = video.url ? {
+    movieId: video.movieId || null,
+    title: video.title || 'Видео',
+    posterPath: normalizedPoster || null,
+    year: video.year || null,
+    sourceType: video.sourceType || null
+  } : null
+
+  const inviter = {
+    id: session.user_id,
+    username: session.username,
+    color: session.color,
+    initials: (session.username || '?').slice(0, 2).toUpperCase(),
+    avatar: normalizeMediaUrl(req, session.avatar || '')
+  }
+
+  const payloadObj = {
+    kind: 'room_invite',
+    roomId,
+    isPrivate: !!room.isPrivate,
+    inviter,
+    members,
+    movie
+  }
+
+  const stored = insertDirectMessage({
+    senderId: session.user_id,
+    recipientId: friendId,
+    text: JSON.stringify(payloadObj),
+    messageType: 'room_invite'
+  })
+
+  const messagePayload = serializeDirectMessage(stored)
+
+  emitToUser(friendId, 'dm-message', {
+    message: messagePayload,
+    from: publicUserCard(req, { id: session.user_id, username: session.username, color: session.color, avatar: session.avatar })
+  })
+  emitToUser(session.user_id, 'dm-message', {
+    message: messagePayload,
+    from: publicUserCard(req, target)
+  })
+  emitUnreadUpdate(friendId)
+
+  res.json({ ok: true, message: messagePayload })
+})
+
 // ==================== ИЗБРАННЫЕ ====================
 
 // Получить список избранных
@@ -1020,6 +1999,64 @@ app.get('/api/favorites/ids', (req, res) => {
   const session = token ? getSession(token) : null
   if (!session) return res.status(401).json({ error: 'Не авторизован' })
   res.json({ ids: getFavoriteMovieIds(session.user_id) })
+})
+
+app.get('/api/video-sources/resolve', (req, res) => {
+  const tmdbId = typeof req.query.tmdbId === 'string' ? req.query.tmdbId.trim() : ''
+  const imdbId = typeof req.query.imdbId === 'string' ? req.query.imdbId.trim() : ''
+
+  if (!tmdbId && !imdbId) {
+    return res.status(400).json({ error: 'tmdbId или imdbId обязателен' })
+  }
+
+  const source = getVideoSource({ tmdbId: tmdbId || null, imdbId: imdbId || null })
+  if (!source) {
+    return res.status(404).json({ error: 'Источник не найден' })
+  }
+
+  res.json({ source })
+})
+
+// Публичный каталог фильмов, у которых админ задал источник воспроизведения.
+// Используется на странице библиотеки как фильтр «Доступно онлайн».
+app.get('/api/video-sources/catalog', (_req, res) => {
+  try {
+    const sources = getAllVideoSources().filter(src => src.isActive)
+    res.json({ sources })
+  } catch (error) {
+    console.error('catalog error', error)
+    res.status(500).json({ error: 'Не удалось загрузить каталог' })
+  }
+})
+
+app.post('/api/video-sources', (req, res) => {
+  const { tmdbId, imdbId, sourceType, sourceUrl, dubLanguage, dubType, title, isActive } = req.body || {}
+  if (!tmdbId || !sourceType || !sourceUrl) {
+    return res.status(400).json({ error: 'tmdbId, sourceType и sourceUrl обязательны' })
+  }
+
+  const allowedSourceTypes = new Set(['html5', 'youtube', 'embed', 'rutube', 'vkvideo'])
+  const normalizedSourceType = String(sourceType).trim().toLowerCase()
+  if (!allowedSourceTypes.has(normalizedSourceType)) {
+    return res.status(400).json({ error: 'Неподдерживаемый sourceType' })
+  }
+
+  try {
+    const source = upsertVideoSource({
+      tmdbId,
+      imdbId,
+      sourceType: normalizedSourceType,
+      sourceUrl,
+      dubLanguage,
+      dubType,
+      title,
+      isActive
+    })
+
+    res.json({ source })
+  } catch (error) {
+    res.status(500).json({ error: 'Не удалось сохранить источник' })
+  }
 })
 
 // Добавить в избранное
@@ -1108,6 +2145,11 @@ app.get('/api/rooms', (req, res) => {
     })
   }
   res.json({ rooms: roomList })
+})
+
+// Сколько уникальных авторизованных пользователей сейчас на сайте
+app.get('/api/presence/online', (_req, res) => {
+  res.json({ online: onlineUserSockets.size })
 })
 
 // Проверка существования комнаты
@@ -1603,6 +2645,56 @@ io.on('connection', (socket) => {
   let currentRoom = null
   let currentUser = null
 
+  // Привязка сокета к личной комнате пользователя (для друзей и личных сообщений)
+  socket.on('auth-register', ({ token } = {}) => {
+    if (!token) return
+    const session = getSession(token)
+    if (!session) {
+      socket.emit('auth-register-failed')
+      return
+    }
+    // Покидаем старую персональную комнату, если переавторизация
+    if (socket.data.personalRoom) {
+      socket.leave(socket.data.personalRoom)
+    }
+    if (socket.data.authUserId && socket.data.authUserId !== session.user_id) {
+      removeOnlineUser(socket.data.authUserId)
+    }
+    const room = `user:${session.user_id}`
+    socket.join(room)
+    socket.data.personalRoom = room
+    const isNewBinding = socket.data.authUserId !== session.user_id
+    socket.data.authUserId = session.user_id
+    if (isNewBinding) addOnlineUser(session.user_id)
+    socket.emit('auth-register-ok', { userId: session.user_id })
+    // Сразу высылаем актуальный счётчик непрочитанных
+    socket.emit('dm-unread', { total: getTotalUnreadCount(session.user_id) })
+  })
+
+  socket.on('auth-unregister', () => {
+    if (socket.data.personalRoom) {
+      socket.leave(socket.data.personalRoom)
+      socket.data.personalRoom = null
+    }
+    if (socket.data.authUserId) {
+      removeOnlineUser(socket.data.authUserId)
+    }
+    socket.data.authUserId = null
+  })
+
+  socket.on('admin:subscribe', ({ token } = {}) => {
+    if (!token) return
+    const session = getSession(token)
+    if (!session || session.role !== 'admin') return
+    socket.join('admins')
+    socket.data.isAdmin = true
+  })
+
+  socket.on('admin:unsubscribe', () => {
+    socket.leave('admins')
+    socket.data.isAdmin = false
+  })
+
   // Присоединение к комнате
   socket.on('join-room', ({ roomId, user }) => {
     roomId = roomId.toUpperCase()
@@ -1690,7 +2782,7 @@ io.on('connection', (socket) => {
   })
 
   // Выбор видео
-  socket.on('select-video', ({ url, movieId, title, imdbId, posterPath, year }) => {
+  socket.on('select-video', ({ url, movieId, title, imdbId, posterPath, year, sourceType }) => {
     if (!currentRoom) return
 
     const room = rooms.get(currentRoom)
@@ -1701,6 +2793,7 @@ io.on('connection', (socket) => {
       movieId,
       title,
       imdbId,
+      sourceType: sourceType || null,
       posterPath,
       year,
       selectedBy: currentUser?.username,
@@ -1861,14 +2954,30 @@ io.on('connection', (socket) => {
     room.messages.push(message)
     if (!currentUser.isGuest) {
       const historyEntry = buildHistoryLogEntry(currentUser.username, text)
-      logChatMessage({
+      const logId = logChatMessage({
         roomId: currentRoom,
         userId: currentUser.id,
         username: currentUser.username,
         messageType: historyEntry.messageType,
         text: historyEntry.text,
-        createdAt: message.timestamp
+        createdAt: message.timestamp,
+        messageId: message.id
       })
+
+      if (historyEntry.messageType !== 'movie') {
+        io.to('admins').emit('admin-chat-log', {
+          id: logId,
+          userId: currentUser.id,
+          username: currentUser.username,
+          roomId: currentRoom,
+          messageType: historyEntry.messageType,
+          text: historyEntry.messageType === 'gif'
+            ? (historyEntry.text.startsWith('GIF:') ? historyEntry.text.slice(4) : historyEntry.text)
+            : historyEntry.text,
+          createdAt: message.timestamp,
+          messageId: message.id
+        })
+      }
     }
     console.log(`✅ Сообщение сохранено, всего сообщений: ${room.messages.length}`)
 
@@ -1930,17 +3039,30 @@ io.on('connection', (socket) => {
 
     room.messages.push(pollMessage)
     if (!currentUser.isGuest) {
-      logChatMessage({
+      const pollText = JSON.stringify({
+        question: question.trim().slice(0, 300),
+        options: options.map(opt => opt.trim().slice(0, 100)).filter(Boolean),
+        multiSelect: !!multiSelect
+      })
+      const logId = logChatMessage({
         roomId: currentRoom,
         userId: currentUser.id,
         username: currentUser.username,
         messageType: 'poll',
-        text: JSON.stringify({
-          question: question.trim().slice(0, 300),
-          options: options.map(opt => opt.trim().slice(0, 100)).filter(Boolean),
-          multiSelect: !!multiSelect
-        }),
-        createdAt: pollMessage.timestamp
+        text: pollText,
+        createdAt: pollMessage.timestamp,
+        messageId: pollMessage.id
+      })
+
+      io.to('admins').emit('admin-chat-log', {
+        id: logId,
+        userId: currentUser.id,
+        username: currentUser.username,
+        roomId: currentRoom,
+        messageType: 'poll',
+        text: pollText,
+        createdAt: pollMessage.timestamp,
+        messageId: pollMessage.id
       })
     }
     
@@ -2183,6 +3305,10 @@ io.on('connection', (socket) => {
   // Отключение
   socket.on('disconnect', () => {
     console.log('🔌 Пользователь отключился:', socket.id)
+    if (socket.data.authUserId) {
+      removeOnlineUser(socket.data.authUserId)
+      socket.data.authUserId = null
+    }
     removeSocketFromRoom(socket)
   })
 })

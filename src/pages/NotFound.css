@@ -140,10 +140,6 @@
   transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
-.notFound__action:hover {
-  transform: translateY(-2px);
-}
-
 .notFound__action--primary {
   background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
   color: #fff;

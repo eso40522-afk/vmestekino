@@ -496,3 +496,15 @@
 .gifPicker__uploadBtn:active {
   transform: scale(0.98);
 }
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 480px) {
+  .gifPicker { max-height: 60vh; }
+  .gifPicker__tab { padding: 8px 10px; font-size: 12px; }
+  .gifPicker__tab span { display: none; }
+  .gifPicker__results { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .gifPicker__searchInput { font-size: 13px; }
+}
+@media (max-width: 380px) {
+  .gifPicker__results { grid-template-columns: 1fr; }
+}

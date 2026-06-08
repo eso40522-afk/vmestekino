@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { getPopularMovies, getPosterUrl } from '../services/tmdb'
+import LegalModal, { type LegalTab } from '../components/LegalModal'
 import './Auth.css'
 
 export default function Login() {
@@ -12,6 +13,8 @@ export default function Login() {
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [posters, setPosters] = useState<string[]>([])
+  const [showPassword, setShowPassword] = useState(false)
+  const [legalTab, setLegalTab] = useState<LegalTab | null>(null)
 
   useEffect(() => {
     if (user && !user.isGuest) navigate(user.role === 'admin' ? '/admin' : '/')
@@ -80,13 +83,26 @@ export default function Login() {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               </span>
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 className="auth-input-group__field"
                 placeholder="Пароль"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 autoComplete="current-password"
               />
+              <button
+                type="button"
+                className="auth-input-group__toggle"
+                onClick={() => setShowPassword(v => !v)}
+                aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                tabIndex={-1}
+              >
+                {showPassword ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                )}
+              </button>
             </div>
 
             <a href="#" className="auth-forgot" onClick={e => e.preventDefault()}>Забыли пароль?</a>
@@ -113,7 +129,7 @@ export default function Login() {
         </div>
 
         <div className="auth-footer">
-          Продолжая, вы соглашаетесь с <a href="#">Условиями использования</a> и <a href="#">Политикой конфиденциальности</a>
+          Продолжая, вы соглашаетесь с <a href="#" onClick={e => { e.preventDefault(); setLegalTab('terms') }}>Условиями использования</a> и <a href="#" onClick={e => { e.preventDefault(); setLegalTab('privacy') }}>Политикой конфиденциальности</a>
         </div>
       </div>
 
@@ -132,6 +148,8 @@ export default function Login() {
           <div className="auth-right__sub">Смотрите фильмы и сериалы вместе с друзьями</div>
         </div>
       </div>
+
+      <LegalModal isOpen={legalTab !== null} initialTab={legalTab ?? 'privacy'} onClose={() => setLegalTab(null)} />
     </div>
   )
 }

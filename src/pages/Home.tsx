@@ -1,11 +1,17 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useSocket } from '../contexts/SocketContext'
 import { getPopularMovies, getNowPlayingMovies, getTopRatedMovies, searchMovies, getPosterUrl, getBackdropUrl, formatReleaseDate, type TMDBMovie } from '../services/tmdb'
+import { buildMovieSlug } from '../utils/movieSlug'
+import UrlPasteModal from '../components/UrlPasteModal'
+import FriendsPanel from '../components/FriendsPanel'
+import MessengerPanel from '../components/MessengerPanel'
+import LegalModal, { type LegalTab } from '../components/LegalModal'
 
 /* ===== Movie Card (stable, memoized) ===== */
-const MovieCard = memo(({ movie, onClick }: { movie: TMDBMovie; onClick: (movieId: number) => void }) => (
-  <div className="kp-card" onClick={() => onClick(movie.id)}>
+const MovieCard = memo(({ movie, onClick }: { movie: TMDBMovie; onClick: (movie: TMDBMovie) => void }) => (
+  <div className="kp-card" onClick={() => onClick(movie)}>
     <div className="kp-card__poster">
       <img src={getPosterUrl(movie.poster_path, 'w342')} alt={movie.title} loading="lazy" />
       {movie.vote_average > 0 && (
@@ -30,7 +36,7 @@ const MovieRow = memo(({ title, movies, speed = 0.5, reverse = false, onClick }:
   movies: TMDBMovie[]
   speed?: number
   reverse?: boolean
-  onClick: (movieId: number) => void
+  onClick: (movie: TMDBMovie) => void
 }) => {
   const trackRef = useRef<HTMLDivElement>(null)
   const firstHalfRef = useRef<HTMLDivElement>(null)
@@ -115,23 +121,31 @@ const MovieRow = memo(({ title, movies, speed = 0.5, reverse = false, onClick }:
 const faqData = [
   {
     question: 'Как смотреть вместе?',
-    answer: 'Создайте комнату, выберите фильм из каталога и поделитесь ссылкой с друзьями. Видео синхронизируется автоматически.'
+    answer: 'Создайте комнату, выберите фильм из каталога или вставьте свою ссылку и поделитесь приглашением с друзьями. Воспроизведение, пауза и перемотка синхронизируются для всех участников автоматически.'
   },
   {
     question: 'Нужна ли регистрация?',
-    answer: 'Нет, можно смотреть как гость. Но зарегистрированные пользователи получают историю просмотров и избранное.'
+    answer: 'Можно войти как гость и сразу присоединяться к комнатам. Регистрация открывает: личный профиль, друзей, личные сообщения, историю просмотров, оценки фильмов и избранное.'
   },
   {
     question: 'Сколько людей могут быть в комнате?',
-    answer: 'До 20 участников одновременно. Все управление — пауза, перемотка — синхронизируется для всех.'
+    answer: 'Технических жёстких ограничений нет — комната рассчитана на дружескую компанию (обычно до 20 человек). Лидер комнаты может приглашать друзей по ссылке или прямо из списка друзей.'
   },
   {
     question: 'Какие фильмы доступны?',
-    answer: 'Каталог содержит тысячи фильмов и сериалов. Выбирайте из популярных, новинок или ищите конкретный фильм.'
+    answer: 'Каталог построен на базе TMDB — это десятки тысяч фильмов и сериалов с описаниями, постерами и оценками. Однако воспроизведение доступно не для всех тайтлов: часть фильмов проигрывается через RuTube и другие открытые источники, поэтому в редких случаях видео может быть недоступно в вашем регионе или временно отсутствовать. Также можно вставить любую свою ссылку — YouTube, RuTube, VK Видео или прямой MP4.'
+  },
+  {
+    question: 'Какие источники видео поддерживаются?',
+    answer: 'YouTube, RuTube, VK Видео, прямые ссылки на MP4/HLS, а также встраиваемые плееры из каталога. Достаточно вставить ссылку — сервис сам подберёт нужный плеер.'
+  },
+  {
+    question: 'Что ещё есть на сайте?',
+    answer: 'Чат в реальном времени с эмодзи, GIF и опросами, голосовые реакции, система друзей и личные сообщения, мини-профили участников прямо в чате, приватные и публичные комнаты, режим одиночного просмотра, оценки и избранное фильмов.'
   },
   {
     question: 'Это бесплатно?',
-    answer: 'Да, сервис полностью бесплатный. Создавайте комнаты и смотрите фильмы вместе без ограничений.'
+    answer: 'Да, сервис полностью бесплатный. Создавайте комнаты, приглашайте друзей и смотрите фильмы вместе без ограничений и без рекламы.'
   }
 ]
 
@@ -171,7 +185,13 @@ export default function Home() {
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [legalTab, setLegalTab] = useState<LegalTab | null>(null)
+  const [showUrlPasteModal, setShowUrlPasteModal] = useState(false)
+  const [showFriendsPanel, setShowFriendsPanel] = useState(false)
+  const [showMessengerPanel, setShowMessengerPanel] = useState(false)
+  const [messengerInitialUserId, setMessengerInitialUserId] = useState<string | null>(null)
   const { user, logout } = useAuth()
+  const { currentRoomId, createRoom, pendingFriendRequests, unreadDmCount } = useSocket()
 
   // Movie data
   const [heroMovie, setHeroMovie] = useState<TMDBMovie | null>(null)
@@ -225,8 +245,16 @@ export default function Home() {
     return () => clearInterval(timer)
   }, [heroMovies])
 
-  const handleWatchTogether = useCallback(() => navigate('/room?view=library'), [navigate])
-  const handleMovieClick = useCallback((movieId: number) => navigate(`/room?movie=${movieId}&view=library`), [navigate])
+  const handleWatchTogether = useCallback(() => navigate('/library'), [navigate])
+  const handleMovieClick = useCallback((movie: TMDBMovie) => {
+    const slug = buildMovieSlug({
+      id: movie.id,
+      title: movie.title,
+      originalTitle: movie.original_title,
+      year: movie.release_date
+    })
+    navigate(`/library/${slug}`)
+  }, [navigate])
 
   // Header search with debounce
   useEffect(() => {
@@ -305,7 +333,7 @@ export default function Home() {
                   setShowHeaderResults(false)
                   setHeaderSearch('')
                   closeMobileMenu()
-                  handleMovieClick(movie.id)
+                  handleMovieClick(movie)
                 }}
               >
                 <img src={getPosterUrl(movie.poster_path, 'w185')} alt={movie.title} className="kp-header-search__poster" />
@@ -367,14 +395,47 @@ export default function Home() {
             {renderHeaderSearch(true)}
 
             <div className="kp-mobileDrawer__section">
-              <button className="kp-mobileDrawer__action" onClick={() => { closeMobileMenu(); handleWatchTogether() }} type="button">
+              <button className="kp-mobileDrawer__action" onClick={() => { closeMobileMenu(); navigate('/rooms') }} type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <rect x="3" y="3" width="7" height="7" rx="2" />
                   <rect x="14" y="3" width="7" height="7" rx="2" />
                   <rect x="3" y="14" width="7" height="7" rx="2" />
                   <rect x="14" y="14" width="7" height="7" rx="2" />
                 </svg>
-                Начать просмотр
+                Комнаты
+              </button>
+              <button className="kp-mobileDrawer__action" onClick={() => { closeMobileMenu(); navigate('/library') }} type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="2" width="20" height="20" rx="2" />
+                  <path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 17h5M17 7h5" />
+                </svg>
+                Библиотека
+              </button>
+              <button
+                className="kp-mobileDrawer__action"
+                onClick={() => { closeMobileMenu(); if (currentRoomId) navigate(`/room/${currentRoomId}`) }}
+                type="button"
+                disabled={!currentRoomId}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                {currentRoomId ? 'Вернуться в комнату' : 'Нет активной комнаты'}
+              </button>
+              {user && !user.isGuest && (
+                <button className="kp-mobileDrawer__action" onClick={() => { closeMobileMenu(); navigate('/library?favorites=1') }} type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                  </svg>
+                  Избранное
+                </button>
+              )}
+              <button className="kp-mobileDrawer__action" onClick={() => { closeMobileMenu(); setShowUrlPasteModal(true) }} type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+                Вставить ссылку
               </button>
               {!user && (
                 <button className="kp-mobileDrawer__action kp-mobileDrawer__action--primary" onClick={() => { closeMobileMenu(); navigate('/register') }} type="button">
@@ -382,6 +443,40 @@ export default function Home() {
                 </button>
               )}
             </div>
+
+            {user && !user.isGuest && (
+              <div className="kp-mobileDrawer__section">
+                <button
+                  className={`kp-mobileDrawer__action${showFriendsPanel ? ' kp-mobileDrawer__action--active' : ''}`}
+                  onClick={() => { closeMobileMenu(); setShowMessengerPanel(false); setShowFriendsPanel(true) }}
+                  type="button"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                  <span className="kp-mobileDrawer__actionLabel">Друзья</span>
+                  {pendingFriendRequests > 0 && (
+                    <span className="kp-mobileDrawer__badge">{pendingFriendRequests}</span>
+                  )}
+                </button>
+                <button
+                  className={`kp-mobileDrawer__action${showMessengerPanel ? ' kp-mobileDrawer__action--active' : ''}`}
+                  onClick={() => { closeMobileMenu(); setShowFriendsPanel(false); setMessengerInitialUserId(null); setShowMessengerPanel(true) }}
+                  type="button"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                  <span className="kp-mobileDrawer__actionLabel">Сообщения</span>
+                  {unreadDmCount > 0 && (
+                    <span className="kp-mobileDrawer__badge">{unreadDmCount}</span>
+                  )}
+                </button>
+              </div>
+            )}
 
             <div className="kp-mobileDrawer__section kp-mobileDrawer__section--account">
               {user && !user.isGuest ? (
@@ -549,11 +644,68 @@ export default function Home() {
           <div className="kp-footer__links">
             <a href="#" onClick={e => { e.preventDefault(); handleWatchTogether() }}>Начать просмотр</a>
             <a href="#" onClick={e => { e.preventDefault(); navigate('/login') }}>Войти</a>
+            <a href="#" onClick={e => { e.preventDefault(); setLegalTab('privacy') }}>Политика конфиденциальности</a>
+            <a href="#" onClick={e => { e.preventDefault(); setLegalTab('terms') }}>Условия использования</a>
           </div>
           <div className="kp-footer__copy">© 2026 ВместеКино. Совместный просмотр фильмов.</div>
         </div>
       </footer>
 
+      <UrlPasteModal
+        isOpen={showUrlPasteModal}
+        onClose={() => setShowUrlPasteModal(false)}
+        onSubmit={({ url, mode, isPrivate }) => {
+          const safeUrl = encodeURIComponent(url)
+          const isAuthedUser = Boolean(user && !user.isGuest)
+          if (mode === 'room' && isAuthedUser) {
+            createRoom(isPrivate)
+              .then(newRoomId => {
+                if (newRoomId) {
+                  navigate(`/room/${newRoomId}?autostartUrl=${safeUrl}`)
+                } else {
+                  navigate(`/room?autostartUrl=${safeUrl}&solo=1`)
+                }
+              })
+              .catch(err => {
+                console.error('createRoom failed', err)
+                navigate(`/room?autostartUrl=${safeUrl}&solo=1`)
+              })
+          } else {
+            navigate(`/room?autostartUrl=${safeUrl}&solo=1`)
+          }
+          setShowUrlPasteModal(false)
+        }}
+        guestMode={!user || user.isGuest}
+      />
+
+      <LegalModal isOpen={legalTab !== null} initialTab={legalTab ?? 'privacy'} onClose={() => setLegalTab(null)} />
+
+      {user && !user.isGuest && (
+        <>
+          <FriendsPanel
+            isOpen={showFriendsPanel}
+            onClose={() => setShowFriendsPanel(false)}
+            onOpenChat={(userId) => {
+              setMessengerInitialUserId(userId)
+              setShowMessengerPanel(true)
+              setShowFriendsPanel(false)
+            }}
+            onOpenProfile={(userId, handle) => {
+              setShowFriendsPanel(false)
+              navigate(handle ? `/${handle}` : `/profile/${userId}`)
+            }}
+          />
+          <MessengerPanel
+            isOpen={showMessengerPanel}
+            onClose={() => { setShowMessengerPanel(false); setMessengerInitialUserId(null) }}
+            initialUserId={messengerInitialUserId}
+            onOpenProfile={(userId, handle) => {
+              setShowMessengerPanel(false)
+              navigate(handle ? `/${handle}` : `/profile/${userId}`)
+            }}
+          />
+        </>
+      )}
 
     </div>
   )

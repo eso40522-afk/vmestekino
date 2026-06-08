@@ -22,3 +22,19 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets
+.env
+.env.local
+.env.production
+
+# SQLite database (локальные данные пользователей)
+server/uniscreen.db
+server/uniscreen.db-shm
+server/uniscreen.db-wal
+
+# Загруженные пользователями файлы
+server/uploads/
+
+# Server logs/runtime
+server/*.log

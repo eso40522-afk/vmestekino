@@ -86,10 +86,18 @@
 }
 
 /* Categories */
+.tmdb-library__controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
 .tmdb-library__categories {
   display: flex;
   gap: 0.5rem;
-  margin-bottom: 1rem;
   flex-wrap: wrap;
 }
 
@@ -112,6 +120,231 @@
 .tmdb-library__category-btn.active {
   background: linear-gradient(135deg, #f59e0b, #d97706);
   color: #fff;
+}
+
+/* Кнопка «Доступно онлайн» — выделена золотистой обводкой и звёздочкой */
+.tmdb-library__category-btn--catalog {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+}
+
+.tmdb-library__category-btn--catalog:hover {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
+.tmdb-library__category-btn--catalog.active {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #1a1a1a;
+  border-color: transparent;
+}
+
+.tmdb-library__catalogStar {
+  display: inline-block;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* Year filter */
+.tmdb-library__yearFilter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  min-width: 0;
+  max-width: none;
+}
+
+.tmdb-library__yearFilter.is-active .tmdb-library__yearLabel {
+  color: #f59e0b;
+}
+
+.tmdb-library__yearHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tmdb-library__yearLabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.tmdb-library__yearInputs {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.tmdb-library__yearInput {
+  width: 54px;
+  padding: 0.3rem 0.4rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.tmdb-library__yearInput::-webkit-outer-spin-button,
+.tmdb-library__yearInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.tmdb-library__yearInput:focus {
+  outline: none;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.tmdb-library__yearDash {
+  color: rgba(255, 255, 255, 0.35);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.tmdb-library__yearReset {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tmdb-library__yearReset svg {
+  display: block;
+}
+
+.tmdb-library__yearReset:hover {
+  background: #f59e0b;
+  color: #fff;
+}
+
+/* Dual range slider — компактный inline */
+.tmdb-library__yearSliderWrap {
+  position: relative;
+  width: 170px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.tmdb-library__yearTrack {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tmdb-library__yearTrackActive {
+  position: absolute;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.tmdb-library__yearRange {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 22px;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: none;
+  margin: 0;
+}
+
+.tmdb-library__yearRange:focus {
+  outline: none;
+}
+
+/* WebKit thumb */
+.tmdb-library__yearRange::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid #f59e0b;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.tmdb-library__yearRange::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.25), 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+
+.tmdb-library__yearRange::-webkit-slider-thumb:active {
+  background: #fbbf24;
+}
+
+/* Firefox thumb */
+.tmdb-library__yearRange::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid #f59e0b;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+
+.tmdb-library__yearRange::-moz-range-thumb:hover {
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.25), 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+
+.tmdb-library__yearRange::-moz-range-track {
+  background: transparent;
+}
+
+.tmdb-library__yearRange--from::-webkit-slider-thumb { position: relative; z-index: 3; }
+.tmdb-library__yearRange--to::-webkit-slider-thumb { position: relative; z-index: 4; }
+
+.tmdb-library__yearScale {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .tmdb-library__yearFilter {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .tmdb-library__yearSliderWrap {
+    width: 100%;
+  }
 }
 
 /* Genres */
@@ -193,12 +426,32 @@
 }
 
 /* Grid */
+/* ITEMS_PER_PAGE = 20 ╤Б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╤Б ╨║╨╛╨╗-╨▓╨╛╨╝ ╨║╨╛╨╗╨╛╨╜╨╛╨║ (5, 4, 2) ╤З╤В╨╛╨▒╤Л */
+/* ╨║╨░╨╢╨┤╨░╤П ╨╜╨╡╨┐╨╛╤Б╨╗╨╡╨┤╨╜╤П╤П ╤Б╤В╤А╨░╨╜╨╕╤Ж╨░ ╨▒╤Л╨╗╨░ ╤А╨╛╨▓╨╜╨╛╨╣ ╤И╨╕╤А╨╕╨╜╨╛╨╣. */
 .tmdb-library__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(6, 1fr);
   gap: 1.5rem;
   max-width: 1400px;
   margin: 0 auto;
+}
+
+@media (max-width: 1280px) {
+  .tmdb-library__grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .tmdb-library__grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .tmdb-library__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* Movie Card */
@@ -283,6 +536,34 @@
   border-radius: 8px;
   font-size: 0.8rem;
   font-weight: 600;
+}
+
+.tmdb-movie-card__rating--catalog {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #1a1a1a;
+}
+
+.tmdb-movie-card__sourceBadge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  background: rgba(20, 20, 28, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    0 6px 18px rgba(0, 0, 0, 0.35);
+  user-select: none;
+  pointer-events: none;
 }
 
 .tmdb-movie-card__info {

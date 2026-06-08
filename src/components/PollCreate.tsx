@@ -41,6 +41,12 @@ export function PollCreate({ onSubmit, onClose }: PollCreateProps) {
 
   const isValid = question.trim().length > 0 && options.filter(o => o.trim().length > 0).length >= 2
 
+  const validationHint = !isValid
+    ? (!question.trim()
+        ? 'Введите вопрос'
+        : 'Заполните минимум 2 варианта ответа')
+    : null
+
   return (
     <div className="pollCreate pollCreate--enter">
       <div className="pollCreate__header">
@@ -113,6 +119,9 @@ export function PollCreate({ onSubmit, onClose }: PollCreateProps) {
         >
           Публикация
         </button>
+        {validationHint && (
+          <div className="pollCreate__hint">{validationHint}</div>
+        )}
       </div>
     </div>
   )

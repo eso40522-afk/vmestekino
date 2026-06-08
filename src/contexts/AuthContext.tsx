@@ -6,6 +6,7 @@ import { API_URL } from '../config/api'
 export interface User {
   id: string
   email?: string
+  handle?: string
   username: string
   color: string
   initials: string
@@ -14,6 +15,7 @@ export interface User {
   bio?: string
   avatar?: string
   banner?: string
+  favoriteGenres?: number[]
   createdAt?: string
   isBanned?: boolean
   banReason?: string
@@ -35,10 +37,10 @@ interface AuthContextType {
   token: string | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
+  register: (email: string, handle: string, password: string) => Promise<void>
   logout: () => void
   loginAsGuest: (username?: string) => void
-  updateProfile: (data: { username?: string; bio?: string; avatar?: string; banner?: string }) => Promise<void>
+  updateProfile: (data: { username?: string; bio?: string; avatar?: string; banner?: string; favoriteGenres?: number[] }) => Promise<void>
   syncUser: (data: Partial<User>) => void
 }
 
@@ -103,11 +105,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // Регистрация
-  const register = useCallback(async (email: string, password: string) => {
+  const register = useCallback(async (email: string, handle: string, password: string) => {
     const res = await fetch(`${API_URL}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, handle, password })
     })
 
     const data = await res.json()
@@ -184,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // Обновление профиля
-  const updateProfile = useCallback(async (data: { username?: string; bio?: string; avatar?: string; banner?: string }) => {
+  const updateProfile = useCallback(async (data: { username?: string; bio?: string; avatar?: string; banner?: string; favoriteGenres?: number[] }) => {
     if (!token) throw new Error('Не авторизован')
 
     const res = await fetch(`${API_URL}/profile`, {
@@ -218,6 +220,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const updatedUser: User = {
       id: result.profile.id,
       email: result.profile.email,
+      handle: result.profile.handle,
       username: result.profile.username,
       color: result.profile.color,
       initials: result.profile.initials,
@@ -225,6 +228,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bio: result.profile.bio,
       avatar: result.profile.avatar,
       banner: result.profile.banner,
+      favoriteGenres: Array.isArray(result.profile.favoriteGenres) ? result.profile.favoriteGenres : [],
       createdAt: result.profile.createdAt,
       isBanned: result.profile.isBanned || false,
       banReason: result.profile.banReason || '',

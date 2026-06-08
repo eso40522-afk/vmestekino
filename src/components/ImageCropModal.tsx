@@ -43,8 +43,8 @@ export default function ImageCropModal({
     setImgSize({ w: img.naturalWidth, h: img.naturalHeight })
 
     // Рассчитываем начальный масштаб, чтобы изображение покрывало область кропа
-    const cropW = container.width
-    const cropH = container.width / aspectRatio
+    const cropW = Math.min(container.width, container.height * aspectRatio)
+    const cropH = cropW / aspectRatio
 
     const scaleW = cropW / img.naturalWidth
     const scaleH = cropH / img.naturalHeight
@@ -62,9 +62,9 @@ export default function ImageCropModal({
     if (!containerRef.current) return
 
     const container = containerRef.current.getBoundingClientRect()
-    const cropW = container.width
-    const cropH = container.width / aspectRatio
-    const cropX = 0
+    const cropW = Math.min(container.width, container.height * aspectRatio)
+    const cropH = cropW / aspectRatio
+    const cropX = (container.width - cropW) / 2
     const cropY = (container.height - cropH) / 2
 
     // Центр кропа
@@ -85,9 +85,9 @@ export default function ImageCropModal({
     if (!containerRef.current) return { x, y }
 
     const container = containerRef.current.getBoundingClientRect()
-    const cropW = container.width
-    const cropH = container.width / aspectRatio
-    const cropX = 0
+    const cropW = Math.min(container.width, container.height * aspectRatio)
+    const cropH = cropW / aspectRatio
+    const cropX = (container.width - cropW) / 2
     const cropY = (container.height - cropH) / 2
 
     const imgW = imgSize.w * s
@@ -164,8 +164,8 @@ export default function ImageCropModal({
   const getMinScale = () => {
     if (!containerRef.current || imgSize.w === 0) return 0.1
     const container = containerRef.current.getBoundingClientRect()
-    const cropW = container.width
-    const cropH = container.width / aspectRatio
+    const cropW = Math.min(container.width, container.height * aspectRatio)
+    const cropH = cropW / aspectRatio
     return Math.max(cropW / imgSize.w, cropH / imgSize.h)
   }
 
@@ -174,9 +174,9 @@ export default function ImageCropModal({
     if (!containerRef.current || !imgRef.current) return
 
     const container = containerRef.current.getBoundingClientRect()
-    const cropW = container.width
-    const cropH = container.width / aspectRatio
-    const cropX = 0
+    const cropW = Math.min(container.width, container.height * aspectRatio)
+    const cropH = cropW / aspectRatio
+    const cropX = (container.width - cropW) / 2
     const cropY = (container.height - cropH) / 2
 
     // Координаты кропа относительно изображения
@@ -202,7 +202,12 @@ export default function ImageCropModal({
     onSave(canvas.toDataURL('image/jpeg', 0.85))
   }
 
-  const cropH = containerSize.w > 0 ? containerSize.w / aspectRatio : 200
+  // Aspect-fit viewport inside the container so the crop box never overflows.
+  const cropW = containerSize.w > 0 && containerSize.h > 0
+    ? Math.min(containerSize.w, containerSize.h * aspectRatio)
+    : 0
+  const cropH = cropW > 0 ? cropW / aspectRatio : 0
+  const cropX = containerSize.w > 0 ? (containerSize.w - cropW) / 2 : 0
   const cropY = containerSize.h > 0 ? (containerSize.h - cropH) / 2 : 0
 
   return (
@@ -237,10 +242,12 @@ export default function ImageCropModal({
           />
 
           {/* Затемнение вне области кропа */}
-          <div className="crop-modal__mask" style={{ '--crop-h': `${cropH}px`, '--crop-y': `${cropY}px` } as React.CSSProperties}>
+          <div className="crop-modal__mask">
             <div className="crop-modal__mask-top" style={{ height: cropY }} />
             <div className="crop-modal__mask-center" style={{ height: cropH }}>
-              <div className={`crop-modal__viewport ${isCircle ? 'crop-modal__viewport--circle' : ''}`} />
+              <div className="crop-modal__mask-side" style={{ width: cropX }} />
+              <div className={`crop-modal__viewport ${isCircle ? 'crop-modal__viewport--circle' : ''}`} style={{ width: cropW }} />
+              <div className="crop-modal__mask-side" style={{ width: cropX }} />
             </div>
             <div className="crop-modal__mask-bottom" style={{ height: cropY }} />
           </div>
